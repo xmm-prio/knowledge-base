@@ -3,7 +3,9 @@
 import subprocess
 from pathlib import Path
 
-from knowledge_base.layout import KnowledgeBaseRoot
+import pytest
+
+from knowledge_base.layout import KnowledgeBaseRoot, OutsideLearnings
 
 
 def test_initialize_creates_the_three_content_directories(tmp_path: Path) -> None:
@@ -84,3 +86,54 @@ def test_initialize_creates_the_runtime_directory(tmp_path: Path) -> None:
 
     assert root.runtime_dir.is_dir()
     assert root.runtime_dir == tmp_path / ".knowledge-base"
+
+
+class TestLearningPathBoundary:
+    """Agents may write learnings and nothing else. This is where that is enforced -- there
+    is no authentication behind it, so a path that escapes here escapes entirely."""
+
+    def test_a_folder_and_title_become_a_file_under_learnings(self, tmp_path: Path) -> None:
+        root = KnowledgeBaseRoot(tmp_path)
+
+        path = root.resolve_learning_path("ascendc", "DataCopy 的对齐要求")
+
+        assert path == tmp_path / "learnings" / "ascendc" / "DataCopy 的对齐要求.md"
+
+    def test_an_empty_folder_writes_directly_under_learnings(self, tmp_path: Path) -> None:
+        root = KnowledgeBaseRoot(tmp_path)
+
+        assert root.resolve_learning_path("", "杂记") == tmp_path / "learnings" / "杂记.md"
+
+    @pytest.mark.parametrize(
+        ("folder", "title"),
+        [
+            ("../knowledge", "偷渡"),
+            ("ascendc/../../codebase", "偷渡"),
+            ("/etc", "passwd"),
+            ("C:/Windows", "hosts"),
+            ("ascendc", "../../knowledge/偷渡"),
+            ("ascendc", "../偷渡"),
+            ("", ".."),
+            ("..", "偷渡"),
+        ],
+    )
+    def test_a_path_that_leaves_learnings_is_refused(
+        self, tmp_path: Path, folder: str, title: str
+    ) -> None:
+        root = KnowledgeBaseRoot(tmp_path)
+
+        with pytest.raises(OutsideLearnings):
+            root.resolve_learning_path(folder, title)
+
+    def test_a_symlink_out_of_learnings_is_refused(self, tmp_path: Path) -> None:
+        root = KnowledgeBaseRoot(tmp_path)
+        root.initialize()
+        try:
+            (tmp_path / "learnings" / "escape").symlink_to(
+                tmp_path / "knowledge", target_is_directory=True
+            )
+        except OSError:  # pragma: no cover - Windows without developer mode
+            pytest.skip("creating symlinks is not permitted here")
+
+        with pytest.raises(OutsideLearnings):
+            root.resolve_learning_path("escape", "偷渡")
