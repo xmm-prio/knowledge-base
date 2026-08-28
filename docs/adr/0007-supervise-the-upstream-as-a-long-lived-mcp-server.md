@@ -8,7 +8,8 @@ codebase-memory-mcp 提供两种等价的调用方式：作为 MCP server 常驻
 
 ## Consequences
 
-- supervisor 的停止逻辑必须执行 `cbm daemon stop`。该守护进程要求同账户下所有 CBM 进程版本完全一致，残留一个旧版本会让升级后的新进程直接拒绝启动。systemd unit 里需要对应的 `ExecStopPost`。
+- supervisor 的停止逻辑必须执行 `codebase-memory-mcp daemon stop`。该守护进程要求同账户下所有 CBM 进程版本完全一致，残留一个旧版本会让升级后的新进程直接拒绝启动。systemd unit 里需要对应的 `ExecStopPost`。
+- 守护进程是按 cache root 区分的，不是每账户一个。服务进程的 cache root 被指到 `<root>/.knowledge-base/cbm`，因此 `ExecStopPost` 必须在同一个 `CBM_CACHE_DIR` 下执行，否则停掉的是默认 `~/.cache` 下的另一个守护进程，等于没停。
 - 启动时先 `config set watcher_enabled false` 再 `daemon stop`，然后才拉起子进程：这个开关只在它的守护进程启动时读一次，不先停掉旧守护进程就不会生效。索引时机由本服务决定，它自己的文件监听会在我们背后重建索引。
 - 与上游的全部交互收敛在 `code/upstream.py` 的一个 Channel 接缝上。真实二进制按平台编译，开发机上通常没有，因此协议层的测试一律走进程内的假 Channel，只有一条集成测试要求二进制真实存在（pytest 标记 `upstream_binary`，缺失时跳过）。
 - `CBM_ALLOWED_ROOT` 指向 `codebase/`：调用方只能报仓库名，但请求要穿过好几层，这是最后一道兜底，防止上游被引导去索引根目录之外的任何路径。
