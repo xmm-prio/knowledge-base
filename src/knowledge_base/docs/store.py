@@ -33,6 +33,14 @@ INDEXED_DIRECTORIES = (KNOWLEDGE_DIRECTORY, LEARNINGS_DIRECTORY)
 """codebase/ is deliberately absent: it holds source, and there can be an enormous amount
 of it. Code is searchable through the code domain instead."""
 
+Progress = Callable[[int, int], None]
+"""Told how many documents of how many are done, so long work can report it is still alive."""
+
+
+def _is_indexed(relative_path: str) -> bool:
+    head, _, tail = relative_path.replace("\\", "/").partition("/")
+    return bool(tail) and head in INDEXED_DIRECTORIES and relative_path.endswith(MARKDOWN_SUFFIX)
+
 
 class LearningExists(ValueError):
     """A learning is already written there. Append to it or revise it instead."""
@@ -65,14 +73,33 @@ class DocumentStore:
         """Commit pending writes without waiting. Called on shutdown."""
         return self._committer.flush_now()
 
-    def rebuild(self) -> int:
-        """Reindex every document from disk. The index holds nothing files do not."""
+    def rebuild(self, progress: Progress | None = None) -> int:
+        """Reindex every document from disk. The index holds nothing files do not.
+
+        `progress` is called after each document with how far along the rebuild is, so a
+        caller bound by a tool-call timeout can keep saying it is still alive.
+        """
         self._index.clear()
-        count = 0
-        for relative in self._markdown_paths():
+        paths = self._markdown_paths()
+        for done, relative in enumerate(paths, start=1):
             self._index.put(load_document(self._root.path, relative))
-            count += 1
-        return count
+            if progress is not None:
+                progress(done, len(paths))
+        return len(paths)
+
+    def synchronize(self, relative_path: str) -> None:
+        """Make the index agree with disk for one path.
+
+        knowledge/ is edited by hand and by git as well as through this service, so the index
+        has to be told what changed rather than assuming it made the change itself.
+        """
+        if not _is_indexed(relative_path):
+            return
+        path = self._root.path / relative_path
+        if path.is_file():
+            self._index.put(load_document(self._root.path, relative_path))
+        else:
+            self._index.remove(relative_path)
 
     def search(self, query: str, limit: int = 20) -> list[Hit]:
         return self._index.search(query, limit=limit)

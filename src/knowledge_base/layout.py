@@ -23,6 +23,7 @@ CODEBASE_DIRECTORY = "codebase"
 CONTENT_DIRECTORIES = (KNOWLEDGE_DIRECTORY, LEARNINGS_DIRECTORY, CODEBASE_DIRECTORY)
 
 RUNTIME_DIRECTORY = ".knowledge-base"
+BASIC_MEMORY_DIRECTORY = "basic-memory"
 
 # basic-memory only reads the root .gitignore, and understands nothing beyond plain
 # directory-name patterns -- no negation, no ** semantics. Keep these patterns naive.
@@ -61,6 +62,11 @@ class KnowledgeBaseRoot:
     def runtime_dir(self) -> Path:
         """Upstream indexes live here; deleting it costs nothing but a reindex."""
         return self.path / RUNTIME_DIRECTORY
+
+    @property
+    def basic_memory_dir(self) -> Path:
+        """Where the document graph keeps its configuration and database."""
+        return self.runtime_dir / BASIC_MEMORY_DIRECTORY
 
     def resolve_learning_path(self, folder: str, title: str) -> Path:
         """Where a learning with this folder and title belongs.

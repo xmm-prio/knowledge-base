@@ -1,7 +1,34 @@
 """Shared test helpers."""
 
+import asyncio
 import subprocess
 from pathlib import Path
+
+
+class ManualSleep:
+    """A background loop's waiting, under test control.
+
+    Stands in for `asyncio.sleep`, so a loop that runs every thirty seconds can be driven
+    beat by beat without a test ever waiting for real time to pass.
+    """
+
+    def __init__(self) -> None:
+        self.intervals: list[float] = []
+        self._waiting = asyncio.Event()
+        self._resume = asyncio.Event()
+
+    async def __call__(self, seconds: float) -> None:
+        self.intervals.append(seconds)
+        self._waiting.set()
+        await self._resume.wait()
+        self._resume.clear()
+
+    async def tick(self) -> None:
+        """Let the loop round exactly once, and return only when it has."""
+        await self._waiting.wait()
+        self._waiting.clear()
+        self._resume.set()
+        await self._waiting.wait()
 
 
 class FakeClock:

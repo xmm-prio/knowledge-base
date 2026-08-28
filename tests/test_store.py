@@ -73,6 +73,63 @@ class TestRebuild:
 
         assert len(store.search("对齐")) == 1
 
+    def test_it_reports_progress_so_a_long_rebuild_can_be_watched(
+        self, store: DocumentStore, tmp_path: Path
+    ) -> None:
+        """A rebuild outlives an agent's tool-call timeout unless it keeps reporting."""
+        for name in ("甲", "乙", "丙"):
+            write(tmp_path, f"knowledge/{name}.md", f"# {name}\n")
+        reported: list[tuple[int, int]] = []
+
+        store.rebuild(progress=lambda done, total: reported.append((done, total)))
+
+        assert reported == [(1, 3), (2, 3), (3, 3)]
+
+
+class TestSynchronize:
+    """knowledge/ is edited by hand and by git, not only through this service."""
+
+    def test_it_indexes_a_document_that_appeared_on_disk(
+        self, store: DocumentStore, tmp_path: Path
+    ) -> None:
+        write(tmp_path, "knowledge/搬运.md", "# UB 搬运\n\n非对齐搬运会读到脏数据。\n")
+
+        store.synchronize("knowledge/搬运.md")
+
+        assert found(store, "脏数据") == ["knowledge/搬运.md"]
+
+    def test_it_reindexes_a_document_that_changed_on_disk(
+        self, store: DocumentStore, tmp_path: Path
+    ) -> None:
+        write(tmp_path, "knowledge/搬运.md", "# UB 搬运\n\n非对齐搬运会读到脏数据。\n")
+        store.synchronize("knowledge/搬运.md")
+
+        write(tmp_path, "knowledge/搬运.md", "# UB 搬运\n\n改用双缓冲后正确。\n")
+        store.synchronize("knowledge/搬运.md")
+
+        assert found(store, "脏数据") == []
+        assert found(store, "双缓冲") == ["knowledge/搬运.md"]
+
+    def test_it_forgets_a_document_that_left_the_disk(
+        self, store: DocumentStore, tmp_path: Path
+    ) -> None:
+        write(tmp_path, "knowledge/搬运.md", "# UB 搬运\n\n非对齐搬运会读到脏数据。\n")
+        store.synchronize("knowledge/搬运.md")
+
+        (tmp_path / "knowledge/搬运.md").unlink()
+        store.synchronize("knowledge/搬运.md")
+
+        assert found(store, "脏数据") == []
+
+    def test_it_leaves_paths_outside_the_indexed_directories_alone(
+        self, store: DocumentStore, tmp_path: Path
+    ) -> None:
+        write(tmp_path, "codebase/proj/README.md", "# 搬运说明\n\n地址对齐要求。\n")
+
+        store.synchronize("codebase/proj/README.md")
+
+        assert found(store, "对齐") == []
+
 
 def a_learning(**kwargs) -> Learning:
     return Learning(

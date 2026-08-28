@@ -88,6 +88,12 @@ def test_initialize_creates_the_runtime_directory(tmp_path: Path) -> None:
     assert root.runtime_dir == tmp_path / ".knowledge-base"
 
 
+def test_the_document_graph_keeps_its_data_under_the_runtime_directory(tmp_path: Path) -> None:
+    root = KnowledgeBaseRoot(tmp_path)
+
+    assert root.basic_memory_dir == tmp_path / ".knowledge-base" / "basic-memory"
+
+
 class TestLearningPathBoundary:
     """Agents may write learnings and nothing else. This is where that is enforced -- there
     is no authentication behind it, so a path that escapes here escapes entirely."""
