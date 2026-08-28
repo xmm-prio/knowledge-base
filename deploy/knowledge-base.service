@@ -1,0 +1,51 @@
+[Unit]
+Description=Team knowledge base: Markdown documents and codebases behind one web UI and one MCP endpoint
+Documentation=https://github.com/DeusData/codebase-memory-mcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=knowledge-base
+Group=knowledge-base
+
+# The knowledge base root. Everything the service reads and writes is under it, and it is a
+# git repository: the service commits into it, so the user above must own it.
+WorkingDirectory=/srv/knowledge-base
+Environment=HOME=/srv/knowledge-base
+Environment=PYTHONUNBUFFERED=1
+
+# codebase-memory-mcp keeps one coordination daemon per account, keyed by its cache root.
+# Declaring both here rather than only in the process means ExecStopPost below addresses the
+# same daemon the service started -- a different root would leave the real one running.
+Environment=CBM_CACHE_DIR=/srv/knowledge-base/.knowledge-base/cbm
+Environment=CBM_ALLOWED_ROOT=/srv/knowledge-base/codebase
+
+# The built web UI is not part of the Python package, so its location is named. Point it at a
+# directory that does not exist and the service still serves the API and the MCP endpoint.
+Environment=KB_FRONTEND_DIST=/opt/knowledge-base/src/frontend/dist
+
+ExecStart=/opt/knowledge-base/venv/bin/knowledge-base server --root /srv/knowledge-base --host 0.0.0.0 --port 8080
+
+# ADR-0007: the shared daemon outlives every session and admits only processes of exactly its
+# own version, so one left behind turns the next upgrade into a boot failure. Nothing about
+# this unit exiting removes it. The leading `-` keeps a failed stop from failing the unit,
+# and the command is a no-op when no daemon is running.
+ExecStopPost=-/usr/local/bin/codebase-memory-mcp daemon stop
+
+# Shutdown flushes the debounced git commit and then waits for the daemon to release other
+# sessions, which the upstream allows up to two minutes for.
+KillSignal=SIGTERM
+TimeoutStopSec=180
+
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/srv/knowledge-base
+
+[Install]
+WantedBy=multi-user.target
