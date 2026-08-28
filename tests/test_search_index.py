@@ -94,3 +94,96 @@ def test_an_observation_is_a_hit_of_its_own(index: SearchIndex) -> None:
     hits = index.search("脏数据")
 
     assert [(h.kind, h.snippet) for h in hits] == [("observation", "非对齐搬运时会读到脏数据")]
+
+
+class TestListing:
+    """The directory tree and the tag cloud read the index rather than the disk: it already
+    knows every document's title, and re-parsing the whole corpus per page view would not."""
+
+    def test_it_lists_every_indexed_document_by_path(self, index: SearchIndex) -> None:
+        index.put(doc("learnings/b.md", title="乙"))
+        index.put(doc("knowledge/a.md", title="甲", summary="一句话"))
+
+        listing = index.documents()
+
+        assert [(d.path, d.title, d.summary) for d in listing] == [
+            ("knowledge/a.md", "甲", "一句话"),
+            ("learnings/b.md", "乙", ""),
+        ]
+
+    def test_a_listed_document_carries_its_tags(self, index: SearchIndex) -> None:
+        index.put(doc("learnings/a.md", tags=["ascendc", "datacopy"]))
+
+        assert index.documents()[0].tags == ["ascendc", "datacopy"]
+
+    def test_it_can_be_narrowed_to_one_tag(self, index: SearchIndex) -> None:
+        index.put(doc("learnings/a.md", tags=["ascendc"]))
+        index.put(doc("learnings/b.md", tags=["mops"]))
+
+        assert [d.path for d in index.documents(tag="ascendc")] == ["learnings/a.md"]
+
+    def test_a_document_appears_once_however_many_observations_it_holds(
+        self, index: SearchIndex
+    ) -> None:
+        index.put(
+            doc(
+                "learnings/a.md",
+                observations=[Observation("pitfall", "甲"), Observation("verified", "乙")],
+            )
+        )
+
+        assert [d.path for d in index.documents()] == ["learnings/a.md"]
+
+
+class TestTagCloud:
+    def test_it_counts_how_many_documents_carry_each_tag(self, index: SearchIndex) -> None:
+        index.put(doc("learnings/a.md", tags=["ascendc", "datacopy"]))
+        index.put(doc("learnings/b.md", tags=["ascendc"]))
+
+        assert [(t.tag, t.count) for t in index.tag_counts()] == [("ascendc", 2), ("datacopy", 1)]
+
+    def test_rewriting_a_document_does_not_leave_its_old_tags_behind(
+        self, index: SearchIndex
+    ) -> None:
+        index.put(doc("learnings/a.md", tags=["ascendc"]))
+        index.put(doc("learnings/a.md", tags=["mops"]))
+
+        assert [t.tag for t in index.tag_counts()] == ["mops"]
+
+    def test_removing_a_document_takes_its_tags_with_it(self, index: SearchIndex) -> None:
+        index.put(doc("learnings/a.md", tags=["ascendc"]))
+
+        index.remove("learnings/a.md")
+
+        assert index.tag_counts() == []
+
+
+class TestSize:
+    """The system status page reports how much has actually been indexed."""
+
+    def test_it_reports_documents_observations_and_distinct_tags(self, index: SearchIndex) -> None:
+        index.put(
+            doc(
+                "learnings/a.md",
+                tags=["ascendc"],
+                observations=[Observation("pitfall", "甲"), Observation("verified", "乙")],
+            )
+        )
+        index.put(doc("knowledge/b.md", tags=["ascendc", "mops"]))
+
+        size = index.size()
+
+        assert (size.documents, size.observations, size.tags) == (2, 2, 2)
+
+    def test_an_empty_index_reports_zeroes(self, index: SearchIndex) -> None:
+        size = index.size()
+
+        assert (size.documents, size.observations, size.tags) == (0, 0, 0)
+
+    def test_clearing_the_index_clears_the_tags_too(self, index: SearchIndex) -> None:
+        index.put(doc("learnings/a.md", tags=["ascendc"]))
+
+        index.clear()
+
+        assert index.tag_counts() == []
+        assert index.size().documents == 0

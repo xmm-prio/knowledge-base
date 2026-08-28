@@ -17,8 +17,17 @@ from typing import Any
 
 import httpx
 
-from knowledge_base.docs.store import MARKDOWN_SUFFIX
+from knowledge_base.docs.store import MARKDOWN_SUFFIX, NoSuchDocument
 from knowledge_base.layout import KnowledgeBaseRoot
+
+__all__ = [
+    "DocumentGraph",
+    "GraphUnavailable",
+    "Link",
+    "LinkedDocument",
+    "Neighbourhood",
+    "NoSuchDocument",
+]
 
 BASE_URL = "http://basic-memory.internal"
 
@@ -26,10 +35,6 @@ CONFIG_DIR_VARIABLE = "BASIC_MEMORY_CONFIG_DIR"
 HOME_VARIABLE = "BASIC_MEMORY_HOME"
 SEMANTIC_SEARCH_VARIABLE = "BASIC_MEMORY_SEMANTIC_SEARCH_ENABLED"
 LOGFIRE_VARIABLE = "LOGFIRE_IGNORE_NO_CONFIG"
-
-
-class NoSuchDocument(ValueError):
-    """The knowledge base holds no document at that path."""
 
 
 class GraphUnavailable(RuntimeError):

@@ -19,15 +19,29 @@ from knowledge_base.docs.notes import (
     render_learning,
     replace_observation,
 )
-from knowledge_base.docs.search_index import Hit, SearchIndex
+from knowledge_base.docs.search_index import (
+    Hit,
+    IndexedDocument,
+    IndexSize,
+    SearchIndex,
+    TagCount,
+)
 from knowledge_base.layout import (
     KNOWLEDGE_DIRECTORY,
     LEARNINGS_DIRECTORY,
+    MARKDOWN_SUFFIX,
     KnowledgeBaseRoot,
 )
-from knowledge_base.vcs import AutoCommitter, Repository
+from knowledge_base.vcs import DEFAULT_LOG_LENGTH, AutoCommitter, Repository, Revision
 
-MARKDOWN_SUFFIX = ".md"
+__all__ = [
+    "MARKDOWN_SUFFIX",
+    "DocumentStore",
+    "LearningExists",
+    "NoSuchDocument",
+    "NoSuchLearning",
+    "Progress",
+]
 
 INDEXED_DIRECTORIES = (KNOWLEDGE_DIRECTORY, LEARNINGS_DIRECTORY)
 """codebase/ is deliberately absent: it holds source, and there can be an enormous amount
@@ -46,7 +60,11 @@ class LearningExists(ValueError):
     """A learning is already written there. Append to it or revise it instead."""
 
 
-class NoSuchLearning(ValueError):
+class NoSuchDocument(ValueError):
+    """The knowledge base holds no document at that path."""
+
+
+class NoSuchLearning(NoSuchDocument):
     """There is no learning, or no observation, matching what the caller named."""
 
 
@@ -61,9 +79,8 @@ class DocumentStore:
     ) -> None:
         self._root = root
         self._index = SearchIndex(root.runtime_dir / "search.db")
-        self._committer = AutoCommitter(
-            Repository(root.path), quiet_period=quiet_period, clock=clock
-        )
+        self._repository = Repository(root.path)
+        self._committer = AutoCommitter(self._repository, quiet_period=quiet_period, clock=clock)
 
     def commit_if_quiet(self) -> bool:
         """Commit pending writes if their author has gone quiet. Called on a timer."""
@@ -105,7 +122,17 @@ class DocumentStore:
         return self._index.search(query, limit=limit)
 
     def read(self, relative_path: str) -> Document:
+        """One document, reduced to what is indexed and displayed."""
+        self._existing_document(relative_path)
         return load_document(self._root.path, relative_path)
+
+    def read_text(self, relative_path: str) -> str:
+        """One document's raw Markdown, exactly as it sits on disk.
+
+        The editor is a source editor and the renderer is a separate pipeline, so text
+        crosses this boundary unparsed in both directions (ADR-0005).
+        """
+        return self._existing_document(relative_path).read_text(encoding="utf-8")
 
     def create_learning(self, folder: str, learning: Learning) -> str:
         """Write a new learning. Returns its path relative to the root."""
@@ -139,6 +166,84 @@ class DocumentStore:
         path.unlink()
         self._index.remove(relative_path)
         self._committer.record(author, path)
+
+    def write_document(self, relative_path: str, text: str, author: str) -> str:
+        """Write a document as a person typed it, creating it if it is not there yet.
+
+        The text is raw Markdown in and raw Markdown out: the web editor is a source editor,
+        and re-serializing a document would rewrite every observation line (ADR-0005). This
+        is the human write path -- wider than an agent's, since people maintain knowledge/ --
+        and it shares the queue, the index update and the debounced commit with every other
+        write.
+        """
+        path = self._root.resolve_document_file(relative_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return self._write(path, text, author)
+
+    def delete_document(self, relative_path: str, author: str) -> None:
+        """Remove a document a person may edit. The file is recoverable from git."""
+        path = self._existing_document(relative_path)
+        path.unlink()
+        self._index.remove(self._root.relative(path))
+        self._committer.record(author, path)
+
+    def restore(self, relative_path: str, revision: str, author: str) -> str | None:
+        """Put a document back to the text it held at one revision.
+
+        One document at a time, never a whole commit: a commit here aggregates whatever one
+        author happened to write during a quiet period, so it is not a unit anybody meant.
+        The old text is written as a new commit of its own, immediately -- history is
+        appended to, never rewritten (ADR-0003), and a deliberate act should be visible the
+        moment it happens.
+
+        Returns the commit it made, or None when the document already held that text.
+        """
+        path = self._root.resolve_document_file(relative_path)
+        text = self._repository.file_at(revision, relative_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        relative = self._root.relative(path)
+        self._index.put(load_document(self._root.path, relative))
+        message = f"{author} 把 {relative} 回滚到 {revision[:8]}"
+        if not self._committer.commit_alone(author, path, message):
+            return None
+        return self._repository.log(relative, limit=1)[0].revision
+
+    def history(
+        self, relative_path: str | None = None, limit: int = DEFAULT_LOG_LENGTH
+    ) -> list[Revision]:
+        """The commits touching one document, or the whole knowledge base, newest first."""
+        return self._repository.log(relative_path, limit=limit)
+
+    def revision_text(self, relative_path: str, revision: str) -> str:
+        """A document's raw Markdown as it stood at one revision."""
+        return self._repository.file_at(revision, relative_path)
+
+    def timestamps(self, relative_path: str) -> tuple[str | None, str | None]:
+        """When a document was created and last changed, read from git (ADR-0003)."""
+        return self._repository.timestamps(relative_path)
+
+    def paths_in(self, revision: str) -> list[str]:
+        """The documents one commit touched."""
+        return self._repository.paths_in(revision)
+
+    def documents(self, tag: str | None = None) -> list[IndexedDocument]:
+        """Every indexed document, optionally only those carrying one tag."""
+        return self._index.documents(tag)
+
+    def tag_counts(self) -> list[TagCount]:
+        """Every tag in use, most used first."""
+        return self._index.tag_counts()
+
+    def size(self) -> IndexSize:
+        """How much of the knowledge base is indexed."""
+        return self._index.size()
+
+    def _existing_document(self, relative_path: str) -> Path:
+        path = self._root.resolve_document_file(relative_path)
+        if not path.is_file():
+            raise NoSuchDocument(f"no document at {relative_path}")
+        return path
 
     def _existing_learning(self, relative_path: str) -> Path:
         path = self._root.resolve_learning_file(relative_path)

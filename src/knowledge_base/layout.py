@@ -6,8 +6,16 @@ from pathlib import Path
 from knowledge_base.vcs import Repository
 
 
-class OutsideLearnings(ValueError):
+class OutsideBoundary(ValueError):
+    """A caller asked to write somewhere writes are not allowed."""
+
+
+class OutsideLearnings(OutsideBoundary):
     """A caller asked to write somewhere agents are not allowed to write."""
+
+
+class OutsideDocuments(OutsideBoundary):
+    """A caller asked to write somewhere nobody -- agent or person -- may write."""
 
 
 # A leading separator or a drive letter means the caller handed us an absolute location.
@@ -22,6 +30,12 @@ CODEBASE_DIRECTORY = "codebase"
 
 CONTENT_DIRECTORIES = (KNOWLEDGE_DIRECTORY, LEARNINGS_DIRECTORY, CODEBASE_DIRECTORY)
 
+EDITABLE_DIRECTORIES = (KNOWLEDGE_DIRECTORY, LEARNINGS_DIRECTORY)
+"""Where a person may write. Wider than an agent's boundary -- knowledge/ is maintained by
+hand -- and still narrower than the root: codebase/ carries its own history."""
+
+MARKDOWN_SUFFIX = ".md"
+
 RUNTIME_DIRECTORY = ".knowledge-base"
 BASIC_MEMORY_DIRECTORY = "basic-memory"
 
@@ -30,13 +44,13 @@ BASIC_MEMORY_DIRECTORY = "basic-memory"
 IGNORED_PATTERNS = ("codebase/", f"{RUNTIME_DIRECTORY}/")
 
 
-def _contained_parts(text: str) -> list[str]:
+def _contained_parts(text: str, refusal: type[OutsideBoundary] = OutsideLearnings) -> list[str]:
     """Split a caller-supplied fragment into path parts, refusing anything that climbs."""
     if _ANCHORED.match(text):
-        raise OutsideLearnings(f"{text!r} is an absolute location")
+        raise refusal(f"{text!r} is an absolute location")
     parts = [part for part in _SEPARATOR.split(text.strip()) if part not in ("", ".")]
     if ".." in parts:
-        raise OutsideLearnings(f"{text!r} climbs out of learnings/")
+        raise refusal(f"{text!r} climbs out of the knowledge base")
     return parts
 
 
@@ -102,6 +116,29 @@ class KnowledgeBaseRoot:
         resolved = learnings.joinpath(*parts[1:]).resolve()
         if not resolved.is_relative_to(learnings):
             raise OutsideLearnings(f"{relative_path!r} resolves outside {LEARNINGS_DIRECTORY}/")
+        return resolved
+
+    def resolve_document_file(self, relative_path: str) -> Path:
+        """Where a document a person may edit lives, given its path relative to the root.
+
+        Wider than the agent boundary above -- the web UI is for people, and knowledge/ is
+        maintained by hand -- and enforced just as strictly, because there is no
+        authentication behind it. Only Markdown, only under the editable directories: a
+        browser must never be able to place a file in codebase/ or at the root.
+        """
+        parts = _contained_parts(relative_path, OutsideDocuments)
+        if len(parts) < 2 or parts[0] not in EDITABLE_DIRECTORIES:
+            raise OutsideDocuments(
+                f"{relative_path!r} is not under one of {'/, '.join(EDITABLE_DIRECTORIES)}/"
+            )
+        if not parts[-1].endswith(MARKDOWN_SUFFIX):
+            raise OutsideDocuments(f"{relative_path!r} is not a Markdown document")
+
+        directory = (self.path / parts[0]).resolve()
+        resolved = directory.joinpath(*parts[1:]).resolve()
+        # resolve() walks symlinks too, so a link planted inside cannot be a door out.
+        if not resolved.is_relative_to(directory):
+            raise OutsideDocuments(f"{relative_path!r} resolves outside {parts[0]}/")
         return resolved
 
     def relative(self, path: Path) -> str:

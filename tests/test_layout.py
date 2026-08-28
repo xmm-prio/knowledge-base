@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from knowledge_base.layout import KnowledgeBaseRoot, OutsideLearnings
+from knowledge_base.layout import KnowledgeBaseRoot, OutsideDocuments, OutsideLearnings
 
 
 def test_initialize_creates_the_three_content_directories(tmp_path: Path) -> None:
@@ -143,3 +143,65 @@ class TestLearningPathBoundary:
 
         with pytest.raises(OutsideLearnings):
             root.resolve_learning_path("escape", "偷渡")
+
+
+class TestDocumentPathBoundary:
+    """People edit knowledge/ as well as learnings/, and nothing else. The service has no
+    authentication, so a browser that gets past this boundary is past every boundary."""
+
+    def test_a_document_under_knowledge_may_be_edited_by_hand(self, tmp_path: Path) -> None:
+        """knowledge/ is maintained by people; only the MCP tools are kept out of it."""
+        root = KnowledgeBaseRoot(tmp_path)
+
+        path = root.resolve_document_file("knowledge/搬运 API 概览.md")
+
+        assert path == tmp_path / "knowledge" / "搬运 API 概览.md"
+
+    def test_a_learning_may_be_edited_by_hand_too(self, tmp_path: Path) -> None:
+        root = KnowledgeBaseRoot(tmp_path)
+
+        path = root.resolve_document_file("learnings/ascendc/对齐要求.md")
+
+        assert path == tmp_path / "learnings" / "ascendc" / "对齐要求.md"
+
+    @pytest.mark.parametrize(
+        "relative_path",
+        [
+            "codebase/mops/README.md",
+            ".gitignore",
+            "../外面.md",
+            "knowledge/../../外面.md",
+            "/etc/passwd",
+            "C:/Windows/hosts",
+            "knowledge",
+            "",
+        ],
+    )
+    def test_a_path_outside_the_editable_directories_is_refused(
+        self, tmp_path: Path, relative_path: str
+    ) -> None:
+        root = KnowledgeBaseRoot(tmp_path)
+
+        with pytest.raises(OutsideDocuments):
+            root.resolve_document_file(relative_path)
+
+    def test_a_file_that_is_not_markdown_is_refused(self, tmp_path: Path) -> None:
+        """The web UI edits documents. Letting it place any file at all is a different power."""
+        root = KnowledgeBaseRoot(tmp_path)
+
+        with pytest.raises(OutsideDocuments):
+            root.resolve_document_file("knowledge/deploy.sh")
+
+    def test_a_symlink_out_of_the_editable_directories_is_refused(self, tmp_path: Path) -> None:
+        root = KnowledgeBaseRoot(tmp_path)
+        root.initialize()
+        (tmp_path / "outside").mkdir()
+        try:
+            (tmp_path / "knowledge" / "escape").symlink_to(
+                tmp_path / "outside", target_is_directory=True
+            )
+        except OSError:  # pragma: no cover - Windows without developer mode
+            pytest.skip("creating symlinks is not permitted here")
+
+        with pytest.raises(OutsideDocuments):
+            root.resolve_document_file("knowledge/escape/偷渡.md")

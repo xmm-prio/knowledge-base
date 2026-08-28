@@ -182,6 +182,64 @@ class TestConcurrency:
             assert (harness.root.path / path).is_file()
 
 
+class TestEditingByHand:
+    """The web UI's write path: people maintain knowledge/, agents may not."""
+
+    async def test_a_document_written_in_the_browser_is_searchable_at_once(
+        self, harness: Harness
+    ) -> None:
+        await harness.service.write_document(OVERVIEW, "# 概览\n\n非对齐会读到脏数据。\n", "dyq")
+
+        assert sorted({hit.path for hit in await harness.service.search("脏数据")}) == [OVERVIEW]
+
+    async def test_it_reaches_git_behind_the_same_debounce_as_a_distillation(
+        self, harness: Harness
+    ) -> None:
+        await harness.service.write_document(OVERVIEW, "# 概览\n", "dyq")
+
+        await harness.go_quiet()
+
+        assert commits(harness.root.path) == ["dyq|dyq 沉淀了 1 处改动"]
+        assert files_in(harness.root.path, "HEAD") == [OVERVIEW]
+
+    async def test_it_refuses_to_write_into_the_codebase(self, harness: Harness) -> None:
+        from knowledge_base.layout import OutsideDocuments
+
+        with pytest.raises(OutsideDocuments):
+            await harness.service.write_document("codebase/mops/README.md", "偷渡", "dyq")
+
+
+class TestRollingBack:
+    async def test_it_restores_a_document_and_appends_a_commit(self, harness: Harness) -> None:
+        for text in ("# 概览\n\n旧结论。\n", "# 概览\n\n新结论。\n"):
+            await harness.service.write_document(OVERVIEW, text, "dyq")
+            await harness.go_quiet()
+        first = (await harness.service.history(OVERVIEW))[-1].revision
+
+        await harness.service.restore(OVERVIEW, first, "ops")
+
+        assert (harness.root.path / OVERVIEW).read_text(encoding="utf-8") == "# 概览\n\n旧结论。\n"
+        assert len(commits(harness.root.path)) == 3
+
+
+class TestListing:
+    async def test_the_tag_cloud_counts_every_tag_in_use(self, harness: Harness) -> None:
+        await harness.service.create_learning("ascendc", a_learning(title="甲"))
+        await harness.service.create_learning("ascendc", a_learning(title="乙"))
+
+        assert [(t.tag, t.count) for t in await harness.service.tag_cloud()] == [("ascendc", 2)]
+
+    async def test_the_tree_lists_documents_from_both_directories(self, harness: Harness) -> None:
+        harness.write(OVERVIEW, "# 概览\n")
+        await harness.service.create_learning("ascendc", a_learning())
+        await harness.service.rebuild()
+
+        assert [d.path for d in await harness.service.documents()] == [
+            OVERVIEW,
+            "learnings/ascendc/DataCopy 的对齐要求.md",
+        ]
+
+
 @pytest.mark.parametrize("folder", ["../knowledge", "/etc"])
 async def test_it_still_refuses_to_write_outside_learnings(harness: Harness, folder: str) -> None:
     """Queuing a write must not lose the boundary the write would have been refused at."""

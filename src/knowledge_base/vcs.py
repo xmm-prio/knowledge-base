@@ -2,17 +2,47 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
 AUTHOR_EMAIL_DOMAIN = "knowledge-base.local"
 
+DEFAULT_LOG_LENGTH = 50
+
+# Only an object name may be handed to git as a revision. A caller-supplied string that
+# begins with a dash would otherwise be read as an option by the process below us.
+_OBJECT_NAME = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+
+_FIELD = "\x1f"
+"""Separates log fields. Commit subjects may contain anything printable, so the separator
+has to be something a person cannot type."""
+
 
 class GitError(RuntimeError):
     """A git invocation failed."""
+
+
+class NoSuchRevision(ValueError):
+    """No such commit, or that document is not in it."""
+
+
+@dataclass(frozen=True)
+class Revision:
+    """One commit, as the history page shows it."""
+
+    revision: str
+    """The full object name. Short names are ambiguous once a history grows."""
+
+    author: str
+    message: str
+    at: str
+    """The author date, ISO-8601 with an offset. Documents carry no timestamp of their own
+    (ADR-0003), so this is the only answer to when something changed."""
 
 
 class Repository:
@@ -56,8 +86,58 @@ class Repository:
         )
         return True
 
+    def log(
+        self, relative_path: str | None = None, limit: int = DEFAULT_LOG_LENGTH
+    ) -> list[Revision]:
+        """The commits touching one document, or the whole knowledge base, newest first."""
+        if not self._has_history:
+            return []
+        arguments = ["log", f"--max-count={limit}", f"--pretty=%H{_FIELD}%an{_FIELD}%aI{_FIELD}%s"]
+        if relative_path is not None:
+            arguments += ["--", relative_path]
+        return [_revision(line) for line in self._git(*arguments).splitlines() if line]
+
+    def paths_in(self, revision: str) -> list[str]:
+        """The documents one commit touched."""
+        listing = self._git("show", "--name-only", "--pretty=", _verified(revision))
+        return sorted(line for line in listing.splitlines() if line)
+
+    def file_at(self, revision: str, relative_path: str) -> str:
+        """One document's text as it stood at a revision.
+
+        Raises NoSuchRevision when the commit is unknown or held no such document, which is
+        what stops a rollback from turning into a deletion nobody asked for.
+        """
+        try:
+            return self._git("show", f"{_verified(revision)}:{relative_path}")
+        except GitError as missing:
+            raise NoSuchRevision(f"{relative_path} is not in {revision}") from missing
+
+    def timestamps(self, relative_path: str) -> tuple[str | None, str | None]:
+        """When a document first entered history and when it last changed.
+
+        Both are None while it has never been committed -- a document written seconds ago is
+        waiting out its quiet period, not missing.
+        """
+        if not self._has_history:
+            return None, None
+        listing = self._git("log", "--pretty=%aI", "--", relative_path)
+        dates = [line for line in listing.splitlines() if line]
+        if not dates:
+            return None, None
+        return dates[-1], dates[0]
+
     def _tracked(self, path: Path) -> bool:
         return bool(self._git("ls-files", "--", str(path)).strip())
+
+    @property
+    def _has_history(self) -> bool:
+        """A repository with no commit yet answers every log with an error, not an empty list."""
+        try:
+            self._git("rev-parse", "--verify", "--quiet", "HEAD")
+        except GitError:
+            return False
+        return True
 
     def _git(self, *args: str) -> str:
         result = subprocess.run(
@@ -72,6 +152,17 @@ class Repository:
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout
+
+
+def _verified(revision: str) -> str:
+    if not _OBJECT_NAME.match(revision):
+        raise NoSuchRevision(f"{revision!r} is not a commit id")
+    return revision
+
+
+def _revision(line: str) -> Revision:
+    name, author, at, message = line.split(_FIELD, 3)
+    return Revision(revision=name, author=author, message=message, at=at)
 
 
 class AutoCommitter:
@@ -115,6 +206,16 @@ class AutoCommitter:
     def flush_now(self) -> bool:
         """Commit whatever is pending, without waiting. For shutdown."""
         return self._commit()
+
+    def commit_alone(self, author: str, path: Path, message: str) -> bool:
+        """Commit one change immediately, under its own message.
+
+        For the changes a person makes on purpose -- a rollback -- and expects to see in
+        history at once. Whatever was pending is committed first, so a deliberate act never
+        drags somebody else's unrelated writes under its message.
+        """
+        self._commit()
+        return self._repository.commit(message, author, [path])
 
     def _commit(self) -> bool:
         if self._author is None:

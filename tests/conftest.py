@@ -1,8 +1,17 @@
 """Shared test helpers."""
 
+from __future__ import annotations
+
 import asyncio
 import subprocess
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+import pytest_asyncio
+
+if TYPE_CHECKING:
+    from api_harness import ApiHarness
 
 
 class ManualSleep:
@@ -63,3 +72,12 @@ def files_in(path: Path, revision: str) -> list[str]:
     """The files one commit touched."""
     listing = _git(path, "show", "--name-only", "--pretty=", revision)
     return sorted(line for line in listing.splitlines() if line)
+
+
+@pytest_asyncio.fixture
+async def api(tmp_path: Path) -> AsyncIterator[ApiHarness]:
+    """A running REST API over a real document domain. Built in `api_harness`."""
+    from api_harness import running_api
+
+    async with running_api(tmp_path) as harness:
+        yield harness

@@ -11,7 +11,7 @@ Nothing here is a source of truth: the whole database can be deleted and rebuilt
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import jieba
@@ -30,6 +30,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entries USING fts5(
     summary UNINDEXED,
     snippet UNINDEXED
 );
+CREATE TABLE IF NOT EXISTS document_tags (path TEXT NOT NULL, tag TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS document_tags_by_tag ON document_tags (tag);
+CREATE INDEX IF NOT EXISTS document_tags_by_path ON document_tags (path);
 """
 
 
@@ -43,6 +46,33 @@ class Hit:
     summary: str
     snippet: str
     score: float
+
+
+@dataclass(frozen=True)
+class IndexedDocument:
+    """One document as the tree and the tag cloud list it, without its text."""
+
+    path: str
+    title: str
+    summary: str
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TagCount:
+    """One tag, and how many documents carry it."""
+
+    tag: str
+    count: int
+
+
+@dataclass(frozen=True)
+class IndexSize:
+    """How much of the knowledge base is indexed right now."""
+
+    documents: int
+    observations: int
+    tags: int
 
 
 class SearchIndex:
@@ -84,12 +114,60 @@ class SearchIndex:
             "VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
+        self._db.executemany(
+            "INSERT INTO document_tags (path, tag) VALUES (?, ?)",
+            [(document.path, tag) for tag in document.tags],
+        )
         self._db.commit()
 
     def remove(self, path: str) -> None:
         """Drop everything indexed for a path."""
         self._db.execute("DELETE FROM entries WHERE path = ?", (path,))
+        self._db.execute("DELETE FROM document_tags WHERE path = ?", (path,))
         self._db.commit()
+
+    def documents(self, tag: str | None = None) -> list[IndexedDocument]:
+        """Every indexed document, by path, optionally only those carrying one tag."""
+        where = (
+            "kind = ?"
+            if tag is None
+            else ("kind = ? AND path IN (SELECT path FROM document_tags WHERE tag = ?)")
+        )
+        parameters = (DOCUMENT,) if tag is None else (DOCUMENT, tag)
+        rows = self._db.execute(
+            f"SELECT path, title, summary FROM entries WHERE {where} ORDER BY path", parameters
+        ).fetchall()
+        tags = self._tags_by_path()
+        return [
+            IndexedDocument(path=path, title=title, summary=summary, tags=tags.get(path, []))
+            for path, title, summary in rows
+        ]
+
+    def tag_counts(self) -> list[TagCount]:
+        """Every tag in use, most used first, then alphabetically."""
+        rows = self._db.execute(
+            "SELECT tag, COUNT(*) AS uses FROM document_tags GROUP BY tag ORDER BY uses DESC, tag"
+        ).fetchall()
+        return [TagCount(tag=tag, count=uses) for tag, uses in rows]
+
+    def size(self) -> IndexSize:
+        """How much is indexed, for the status page."""
+        counted = self._db.execute("SELECT kind, COUNT(*) FROM entries GROUP BY kind").fetchall()
+        by_kind = dict(counted)
+        (tags,) = self._db.execute("SELECT COUNT(DISTINCT tag) FROM document_tags").fetchone()
+        return IndexSize(
+            documents=by_kind.get(DOCUMENT, 0),
+            observations=by_kind.get(OBSERVATION, 0),
+            tags=tags,
+        )
+
+    def _tags_by_path(self) -> dict[str, list[str]]:
+        grouped: dict[str, list[str]] = {}
+        for path, tag in self._db.execute(
+            "SELECT path, tag FROM document_tags ORDER BY rowid"
+        ).fetchall():
+            grouped.setdefault(path, []).append(tag)
+        return grouped
 
     def search(self, query: str, limit: int = 20) -> list[Hit]:
         """Find documents and observations matching a query, best first."""
@@ -106,6 +184,7 @@ class SearchIndex:
     def clear(self) -> None:
         """Empty the index so it can be rebuilt from files."""
         self._db.execute("DELETE FROM entries")
+        self._db.execute("DELETE FROM document_tags")
         self._db.commit()
 
     def close(self) -> None:

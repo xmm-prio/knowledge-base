@@ -25,11 +25,12 @@ from datetime import timedelta
 from knowledge_base.docs.documents import Document
 from knowledge_base.docs.graph import DocumentGraph, Neighbourhood
 from knowledge_base.docs.notes import Learning, Observation
-from knowledge_base.docs.search_index import Hit
+from knowledge_base.docs.search_index import Hit, IndexedDocument, IndexSize, TagCount
 from knowledge_base.docs.store import DocumentStore, Progress
 from knowledge_base.docs.watcher import IndexWatcher
 from knowledge_base.layout import KnowledgeBaseRoot
 from knowledge_base.scheduling import Heartbeat, Sleep
+from knowledge_base.vcs import DEFAULT_LOG_LENGTH, Revision
 from knowledge_base.writes import WriteQueue
 
 QUIET_PERIOD = timedelta(seconds=30)
@@ -76,6 +77,10 @@ class DocumentService:
     async def read(self, relative_path: str) -> Document:
         return self._store.read(relative_path)
 
+    async def read_text(self, relative_path: str) -> str:
+        """One document's raw Markdown, unparsed in both directions (ADR-0005)."""
+        return self._store.read_text(relative_path)
+
     async def explore_links(self, relative_path: str, depth: int = 1) -> Neighbourhood:
         """The documents this one is joined to, and how."""
         return await self._graph.neighbourhood(relative_path, depth=depth)
@@ -99,6 +104,59 @@ class DocumentService:
 
     async def delete_learning(self, relative_path: str, author: str) -> None:
         await self._writes.submit(lambda: self._store.delete_learning(relative_path, author))
+
+    async def write_document(self, relative_path: str, text: str, author: str) -> str:
+        """Write a document as a person typed it, in raw Markdown.
+
+        The web UI's write path. Wider than an agent's -- knowledge/ is maintained by hand --
+        and behind the same queue, so a person saving in the browser and an agent distilling
+        still cannot collide.
+        """
+        return await self._writes.submit(
+            lambda: self._store.write_document(relative_path, text, author)
+        )
+
+    async def delete_document(self, relative_path: str, author: str) -> None:
+        await self._writes.submit(lambda: self._store.delete_document(relative_path, author))
+
+    async def restore(self, relative_path: str, revision: str, author: str) -> str | None:
+        """Put one document back to the text it held at one revision, as a new commit.
+
+        Returns that commit, or None when the document already held that text.
+        """
+        return await self._writes.submit(
+            lambda: self._store.restore(relative_path, revision, author)
+        )
+
+    async def documents(self, tag: str | None = None) -> list[IndexedDocument]:
+        """Every indexed document, optionally only those carrying one tag."""
+        return self._store.documents(tag)
+
+    async def tag_cloud(self) -> list[TagCount]:
+        """Every tag in use, most used first."""
+        return self._store.tag_counts()
+
+    async def size(self) -> IndexSize:
+        """How much of the knowledge base is indexed."""
+        return self._store.size()
+
+    async def history(
+        self, relative_path: str | None = None, limit: int = DEFAULT_LOG_LENGTH
+    ) -> list[Revision]:
+        """The commits touching one document, or the whole knowledge base, newest first."""
+        return await asyncio.to_thread(self._store.history, relative_path, limit)
+
+    async def revision_text(self, relative_path: str, revision: str) -> str:
+        """A document's raw Markdown as it stood at one revision."""
+        return await asyncio.to_thread(self._store.revision_text, relative_path, revision)
+
+    async def timestamps(self, relative_path: str) -> tuple[str | None, str | None]:
+        """When a document was created and last changed, read from git (ADR-0003)."""
+        return await asyncio.to_thread(self._store.timestamps, relative_path)
+
+    async def paths_in(self, revision: str) -> list[str]:
+        """The documents one commit touched."""
+        return await asyncio.to_thread(self._store.paths_in, revision)
 
     async def rebuild(self, progress: Progress | None = None) -> int:
         """Read every document again, into both the search index and the graph.
