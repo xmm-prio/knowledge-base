@@ -262,3 +262,11 @@ python -m venv .venv
 
 - [`CONTEXT.md`](CONTEXT.md) —— 领域词汇表
 - [`docs/adr/`](docs/adr/) —— 架构决策记录
+
+## 许可证
+
+AGPL-3.0，见 [`LICENSE`](LICENSE)。
+
+本服务把 [basic-memory](https://github.com/basicmachines-co/basic-memory)（AGPL-3.0）以库的形式装进同一个进程调用（见 `src/knowledge_base/docs/graph.py`），因此整体只能以 AGPL-3.0 发布。AGPL 与 GPL 的区别在于：通过网络提供服务也构成分发，所以任何人部署本服务，都应当向其使用者提供对应版本的源码。
+
+代码域上游 [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 是 MIT，且以独立子进程运行，不影响本仓库的许可证选择。
