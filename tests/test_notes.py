@@ -9,7 +9,13 @@ import frontmatter
 import pytest
 from basic_memory.markdown.entity_parser import parse as upstream_parse
 
-from knowledge_base.docs.notes import Learning, Observation, Relation, render_learning
+from knowledge_base.docs.notes import (
+    Learning,
+    Observation,
+    Relation,
+    parse_learning,
+    render_learning,
+)
 
 
 def _upstream(text: str):
@@ -71,3 +77,20 @@ def test_rendered_relation_is_read_back_by_upstream() -> None:
     assert len(parsed.relations) == 1
     assert parsed.relations[0].type == "refines"
     assert parsed.relations[0].target == "DataCopy 的对齐要求"
+
+
+def test_a_learning_survives_a_round_trip_through_disk() -> None:
+    """Revising a learning means reading it back, editing, and writing it out again."""
+    learning = Learning(
+        title="DataCopy 的对齐要求",
+        summary="非 32B 对齐的尾块会读到脏数据",
+        tags=["ascendc", "datacopy"],
+        author="dyq",
+        observations=[
+            Observation("pitfall", "blockLen 非 32B 对齐时尾部会读到脏数据", ["对齐"]),
+            Observation("verified", "改用 DataCopyPad(dst, src, padParams)"),
+        ],
+        relations=[Relation("refines", "UB 搬运总览")],
+    )
+
+    assert parse_learning(render_learning(learning)) == learning

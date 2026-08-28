@@ -6,8 +6,10 @@ observation. This module is the only place that knows that shape, in both direct
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
+import frontmatter
 import yaml
 
 OBSERVATIONS_HEADING = "## Observations"
@@ -86,3 +88,47 @@ def _render_observation(observation: Observation) -> str:
     if line.endswith(")"):
         line += PAREN_GUARD
     return line
+
+
+# The category may not contain brackets or parens -- that is upstream's rule, not ours.
+_OBSERVATION_LINE = re.compile(r"^- \[([^\[\]()]+)\]\s+(.+)$")
+_RELATION_LINE = re.compile(r"^- (\S+) \[\[(.+?)\]\]\s*$")
+
+
+def parse_learning(text: str) -> Learning:
+    """Read a learning back from its semantic Markdown."""
+    metadata, body = frontmatter.parse(text)
+
+    observations: list[Observation] = []
+    relations: list[Relation] = []
+    for line in body.splitlines():
+        line = line.rstrip()
+        if observation := _parse_observation(line):
+            observations.append(observation)
+        elif relation := _RELATION_LINE.match(line):
+            relations.append(Relation(type=relation.group(1), target=relation.group(2)))
+
+    return Learning(
+        title=str(metadata.get("title", "")),
+        summary=str(metadata.get("summary", "")),
+        tags=list(metadata.get("tags") or []),
+        author=str(metadata.get("author", "")),
+        observations=observations,
+        relations=relations,
+    )
+
+
+def _parse_observation(line: str) -> Observation | None:
+    match = _OBSERVATION_LINE.match(line)
+    if not match:
+        return None
+    rest = match.group(2)
+    if rest.endswith(PAREN_GUARD.strip()) and rest != PAREN_GUARD.strip():
+        rest = rest[: -len(PAREN_GUARD)].rstrip()
+
+    words = rest.split(" ")
+    tags: list[str] = []
+    while len(words) > 1 and words[-1].startswith("#"):
+        tags.insert(0, words.pop()[1:])
+
+    return Observation(category=match.group(1).strip(), content=" ".join(words), tags=tags)
