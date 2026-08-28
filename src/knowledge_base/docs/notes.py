@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 import frontmatter
 import yaml
 
+from knowledge_base.docs.tags import frontmatter_tags
+
 OBSERVATIONS_HEADING = "## Observations"
 RELATIONS_HEADING = "## Relations"
 
@@ -95,36 +97,52 @@ _OBSERVATION_LINE = re.compile(r"^- \[([^\[\]()]+)\]\s+(.+)$")
 _RELATION_LINE = re.compile(r"^- (\S+) \[\[(.+?)\]\]\s*$")
 
 
-def parse_learning(text: str) -> Learning:
-    """Read a learning back from its semantic Markdown."""
-    metadata, body = frontmatter.parse(text)
+@dataclass(frozen=True)
+class SemanticBody:
+    """A Markdown body split into the prose a human reads and the facts a machine indexes."""
 
+    prose: str
+    observations: list[Observation]
+    relations: list[Relation]
+
+
+def parse_body(body: str) -> SemanticBody:
+    """Separate observation and relation lines from the surrounding prose.
+
+    Lines are recognized wherever they appear, not only under their heading, because
+    knowledge/ is free-form and upstream reads them that way too.
+    """
+    prose: list[str] = []
     observations: list[Observation] = []
     relations: list[Relation] = []
-    for line in body.splitlines():
-        line = line.rstrip()
+
+    for raw in body.splitlines():
+        line = raw.rstrip()
+        if line in (OBSERVATIONS_HEADING, RELATIONS_HEADING):
+            continue
         if observation := _parse_observation(line):
             observations.append(observation)
         elif relation := _RELATION_LINE.match(line):
             relations.append(Relation(type=relation.group(1), target=relation.group(2)))
+        else:
+            prose.append(line)
+
+    return SemanticBody("\n".join(prose).strip(), observations, relations)
+
+
+def parse_learning(text: str) -> Learning:
+    """Read a learning back from its semantic Markdown."""
+    metadata, raw_body = frontmatter.parse(text)
+    body = parse_body(raw_body)
 
     return Learning(
         title=str(metadata.get("title", "")),
         summary=str(metadata.get("summary", "")),
-        tags=_frontmatter_tags(metadata.get("tags")),
+        tags=frontmatter_tags(metadata.get("tags")),
         author=str(metadata.get("author", "")),
-        observations=observations,
-        relations=relations,
+        observations=body.observations,
+        relations=body.relations,
     )
-
-
-def _frontmatter_tags(value: object) -> list[str]:
-    """YAML gives a list for block syntax and a string when someone types `tags: a, b`."""
-    if isinstance(value, str):
-        return [part.strip() for part in value.split(",") if part.strip()]
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    return []
 
 
 def _parse_observation(line: str) -> Observation | None:
