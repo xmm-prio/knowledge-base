@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "knowledge-base"
+version = "0.1.0"
+description = "Internal knowledge base server: Markdown documents and codebases, one web UI and one MCP endpoint"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "basic-memory>=0.23.2",
+    "fastapi>=0.136.1",
+    "fastmcp>=4.0.0b1",
+    "httpx>=0.28",
+    "uvicorn>=0.34",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "typer>=0.15",
+    "watchfiles>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+    "pyright>=1.1.390",
+]
+
+[project.scripts]
+knowledge-base = "knowledge_base.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/knowledge_base"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
