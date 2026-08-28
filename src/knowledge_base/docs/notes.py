@@ -111,11 +111,20 @@ def parse_learning(text: str) -> Learning:
     return Learning(
         title=str(metadata.get("title", "")),
         summary=str(metadata.get("summary", "")),
-        tags=list(metadata.get("tags") or []),
+        tags=_frontmatter_tags(metadata.get("tags")),
         author=str(metadata.get("author", "")),
         observations=observations,
         relations=relations,
     )
+
+
+def _frontmatter_tags(value: object) -> list[str]:
+    """YAML gives a list for block syntax and a string when someone types `tags: a, b`."""
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
 
 
 def _parse_observation(line: str) -> Observation | None:
