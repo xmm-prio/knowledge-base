@@ -145,6 +145,42 @@ def parse_learning(text: str) -> Learning:
     )
 
 
+def append_observations(text: str, observations: list[Observation]) -> str:
+    """Insert observations into an existing document.
+
+    Edits lines rather than re-rendering the file, so prose a human added by hand survives.
+    """
+    lines = text.splitlines()
+    rendered = [_render_observation(observation) for observation in observations]
+
+    after = _last_observation_line(lines)
+    if after is not None:
+        return _joined(lines[: after + 1] + rendered + lines[after + 1 :])
+
+    at = lines.index(RELATIONS_HEADING) if RELATIONS_HEADING in lines else len(lines)
+    return _joined(lines[:at] + [OBSERVATIONS_HEADING, "", *rendered, ""] + lines[at:])
+
+
+def replace_observation(text: str, replaces: str, replacement: Observation) -> str | None:
+    """Overwrite one observation in place. None when no observation says `replaces`."""
+    lines = text.splitlines()
+    for position, line in enumerate(lines):
+        parsed = _parse_observation(line.rstrip())
+        if parsed and parsed.content == replaces:
+            lines[position] = _render_observation(replacement)
+            return _joined(lines)
+    return None
+
+
+def _last_observation_line(lines: list[str]) -> int | None:
+    positions = [i for i, line in enumerate(lines) if _parse_observation(line.rstrip())]
+    return positions[-1] if positions else None
+
+
+def _joined(lines: list[str]) -> str:
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
 def _parse_observation(line: str) -> Observation | None:
     match = _OBSERVATION_LINE.match(line)
     if not match:

@@ -54,7 +54,9 @@ class Repository:
 
     def _git(self, *args: str) -> str:
         result = subprocess.run(
-            ["git", *args],
+            # Document titles are Chinese, and git octal-escapes non-ASCII paths by default,
+            # which would turn every filename we read back into mojibake.
+            ["git", "-c", "core.quotepath=false", *args],
             cwd=self.path,
             capture_output=True,
             text=True,

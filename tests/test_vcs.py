@@ -4,28 +4,15 @@ Committing on every write would bury the history in noise -- one commit per obse
 agent distills. Debouncing is what makes git usable as the version mechanism.
 """
 
-import subprocess
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+from conftest import FakeClock, commits, files_in
 from knowledge_base.vcs import AutoCommitter, Repository
 
 QUIET = timedelta(seconds=30)
-
-
-class FakeClock:
-    """Time under test control, so the quiet period costs nothing to cross."""
-
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 @pytest.fixture
@@ -35,32 +22,10 @@ def repo(tmp_path: Path) -> Repository:
     return repository
 
 
-def commits(path: Path) -> list[str]:
-    log = subprocess.run(
-        ["git", "log", "--pretty=%an|%s"],
-        cwd=path,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    return [line for line in log.stdout.splitlines() if line]
-
-
 def write(repo: Repository, committer: AutoCommitter, author: str, name: str) -> None:
     path = repo.path / name
     path.write_text("经验", encoding="utf-8")
     committer.record(author, path)
-
-
-def files_in(path: Path, revision: str) -> list[str]:
-    listing = subprocess.run(
-        ["git", "show", "--name-only", "--pretty=", revision],
-        cwd=path,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    return sorted(line for line in listing.stdout.splitlines() if line)
 
 
 def test_a_write_is_not_committed_straight_away(repo: Repository) -> None:

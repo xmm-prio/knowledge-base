@@ -16,7 +16,11 @@ class OutsideLearnings(ValueError):
 _ANCHORED = re.compile(r"^(?:[/\\]|[A-Za-z]:)")
 _SEPARATOR = re.compile(r"[/\\]")
 
-CONTENT_DIRECTORIES = ("knowledge", "learnings", "codebase")
+KNOWLEDGE_DIRECTORY = "knowledge"
+LEARNINGS_DIRECTORY = "learnings"
+CODEBASE_DIRECTORY = "codebase"
+
+CONTENT_DIRECTORIES = (KNOWLEDGE_DIRECTORY, LEARNINGS_DIRECTORY, CODEBASE_DIRECTORY)
 
 RUNTIME_DIRECTORY = ".knowledge-base"
 
@@ -77,6 +81,26 @@ class KnowledgeBaseRoot:
         if not resolved.is_relative_to(learnings):
             raise OutsideLearnings(f"{folder}/{title} resolves outside learnings/")
         return resolved
+
+    def resolve_learning_file(self, relative_path: str) -> Path:
+        """Where an existing learning lives, given its path relative to the root.
+
+        Raises OutsideLearnings for anything not under learnings/, which is what stops an
+        agent from editing or deleting knowledge and code.
+        """
+        parts = _contained_parts(relative_path)
+        if len(parts) < 2 or parts[0] != LEARNINGS_DIRECTORY:
+            raise OutsideLearnings(f"{relative_path!r} is not under {LEARNINGS_DIRECTORY}/")
+
+        learnings = self.learnings_dir.resolve()
+        resolved = learnings.joinpath(*parts[1:]).resolve()
+        if not resolved.is_relative_to(learnings):
+            raise OutsideLearnings(f"{relative_path!r} resolves outside {LEARNINGS_DIRECTORY}/")
+        return resolved
+
+    def relative(self, path: Path) -> str:
+        """A path as the rest of the system names it: relative to the root, forward slashes."""
+        return path.resolve().relative_to(self.path.resolve()).as_posix()
 
     def initialize(self) -> None:
         """Create the layout. Safe to run against an already-initialized root."""
