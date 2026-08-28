@@ -222,3 +222,11 @@ class TestLinks:
         assert body["origin"] == LEARNING
         assert [document["path"] for document in body["documents"]] == [OVERVIEW]
         assert body["links"][0]["type"] == "relates_to"
+
+    async def test_a_document_nobody_wrote_has_no_neighbourhood_to_show(
+        self, api: ApiHarness
+    ) -> None:
+        """A browser asking about a document that is not there is a 404, never a crash."""
+        response = await api.client.get("/api/documents/learnings/无人/不存在.md/links")
+
+        assert response.status_code == 404
