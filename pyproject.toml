@@ -39,6 +39,9 @@ packages = ["src/knowledge_base"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "upstream_binary: needs codebase-memory-mcp installed; skipped when it is not",
+]
 
 [tool.ruff]
 line-length = 100
