@@ -34,7 +34,11 @@ class Repository:
 
     def commit(self, message: str, author: str, paths: list[Path]) -> bool:
         """Commit exactly these paths as `author`. False when there was nothing to commit."""
-        pathspecs = [str(p) for p in paths]
+        # A path that is gone and was never tracked is not a change git can be told about:
+        # `add` fails on a pathspec matching nothing, which would take the whole commit down.
+        pathspecs = [str(p) for p in paths if p.exists() or self._tracked(p)]
+        if not pathspecs:
+            return False
         self._git("add", "-A", "--", *pathspecs)
         if not self._git("diff", "--cached", "--name-only", "--", *pathspecs).strip():
             return False
@@ -51,6 +55,9 @@ class Repository:
             *pathspecs,
         )
         return True
+
+    def _tracked(self, path: Path) -> bool:
+        return bool(self._git("ls-files", "--", str(path)).strip())
 
     def _git(self, *args: str) -> str:
         result = subprocess.run(
