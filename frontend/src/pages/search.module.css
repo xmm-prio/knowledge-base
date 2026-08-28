@@ -1,0 +1,123 @@
+.bar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.query {
+  flex: 1;
+  min-width: 280px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  background: var(--c-bg-raised);
+}
+
+.group:hover {
+  border-color: var(--c-border-strong);
+}
+
+.groupHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.title {
+  font-size: var(--t-lg);
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.title:hover {
+  color: var(--c-accent-text);
+  text-decoration: none;
+}
+
+.path {
+  font-family: var(--f-mono);
+  font-size: var(--t-xs);
+  color: var(--c-text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: right;
+}
+
+.summary {
+  color: var(--c-text-muted);
+  font-size: var(--t-md);
+}
+
+.snippets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+}
+
+.snippet {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: 2px var(--s-2);
+  border-left: 2px solid var(--c-border);
+  font-size: var(--t-md);
+  color: var(--c-text);
+}
+
+.kind {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  background: var(--c-bg-active);
+  color: var(--c-text-muted);
+  font-size: var(--t-xs);
+}
+
+.score {
+  flex: none;
+  font-family: var(--f-mono);
+  font-size: var(--t-xs);
+  color: var(--c-text-faint);
+}
+
+.hint {
+  color: var(--c-text-faint);
+  font-size: var(--t-xs);
+}

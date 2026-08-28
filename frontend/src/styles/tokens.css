@@ -1,0 +1,62 @@
+/* The whole visual vocabulary. Nothing below this file invents a colour or a radius. */
+
+:root {
+  --c-bg: #ffffff;
+  --c-bg-sunken: #f7f7f5;
+  --c-bg-raised: #ffffff;
+  --c-bg-hover: #f1f1ef;
+  --c-bg-active: #e9e9e7;
+
+  --c-border: #e6e6e3;
+  --c-border-strong: #d6d6d1;
+
+  --c-text: #2f2f2c;
+  --c-text-muted: #7b7b73;
+  --c-text-faint: #a5a59d;
+  --c-text-invert: #ffffff;
+
+  --c-accent: #2f6df0;
+  --c-accent-soft: #eaf0ff;
+  --c-accent-text: #1b4bbd;
+
+  --c-ok: #2b7a4b;
+  --c-ok-soft: #e8f4ec;
+  --c-warn: #9a6400;
+  --c-warn-soft: #fdf3e0;
+  --c-bad: #b3352c;
+  --c-bad-soft: #fceceb;
+  --c-unknown: #6b6b78;
+  --c-unknown-soft: #eeeef2;
+
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+
+  --f-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei",
+    "Helvetica Neue", Arial, sans-serif;
+  --f-mono:
+    "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, "Cascadia Mono",
+    "PingFang SC", "Microsoft YaHei", monospace;
+
+  --t-xs: 11px;
+  --t-sm: 12px;
+  --t-md: 13px;
+  --t-lg: 15px;
+  --t-xl: 19px;
+  --t-2xl: 24px;
+
+  --shadow-card: 0 1px 2px rgba(15, 15, 15, 0.06);
+  --shadow-pop: 0 6px 20px rgba(15, 15, 15, 0.12);
+
+  --w-sidebar: 260px;
+  --w-nav: 196px;
+}

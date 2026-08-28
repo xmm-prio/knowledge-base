@@ -1,0 +1,140 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.barActions {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.shape {
+  color: var(--c-text-faint);
+  font-size: var(--t-xs);
+  font-family: var(--f-mono);
+}
+
+.tree {
+  font-family: var(--f-mono);
+  font-size: var(--t-sm);
+  line-height: 1.75;
+  overflow-x: auto;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.children {
+  margin-left: var(--s-3);
+  padding-left: var(--s-3);
+  border-left: 1px solid var(--c-border);
+}
+
+.toggle {
+  flex: none;
+  width: 14px;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--c-text-faint);
+  cursor: pointer;
+  text-align: left;
+}
+
+.toggle:hover {
+  color: var(--c-text);
+}
+
+.key {
+  flex: none;
+  color: var(--c-accent-text);
+}
+
+.index {
+  flex: none;
+  color: var(--c-text-faint);
+}
+
+.meta {
+  color: var(--c-text-faint);
+}
+
+.string {
+  color: #1f7a4d;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.number {
+  color: #b3392c;
+}
+
+.boolean {
+  color: #7a3fb5;
+}
+
+.nullish {
+  color: var(--c-text-faint);
+  font-style: italic;
+}
+
+.block {
+  margin: 2px 0;
+  padding: var(--s-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-bg-sunken);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.raw {
+  margin: 0;
+  padding: var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  background: var(--c-bg-sunken);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  max-height: 520px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.table {
+  border-collapse: collapse;
+  font-size: var(--t-sm);
+  width: 100%;
+}
+
+.table th,
+.table td {
+  border: 1px solid var(--c-border);
+  padding: 3px 8px;
+  text-align: left;
+  vertical-align: top;
+  max-width: 380px;
+  overflow-wrap: anywhere;
+}
+
+.table th {
+  background: var(--c-bg-sunken);
+  color: var(--c-text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+}

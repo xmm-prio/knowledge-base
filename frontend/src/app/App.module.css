@@ -1,0 +1,129 @@
+.shell {
+  display: grid;
+  grid-template-columns: var(--w-nav) 1fr;
+  height: 100%;
+  background: var(--c-bg);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-4) var(--s-3);
+  border-right: 1px solid var(--c-border);
+  background: var(--c-bg-sunken);
+  overflow-y: auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 0 var(--s-2) var(--s-4);
+}
+
+.brandMark {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-md);
+  background: var(--c-text);
+  color: var(--c-text-invert);
+  font-size: var(--t-sm);
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.brandName {
+  font-size: var(--t-lg);
+  font-weight: 600;
+}
+
+.navLink {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 5px var(--s-2);
+  border-radius: var(--r-md);
+  color: var(--c-text-muted);
+  font-size: var(--t-md);
+}
+
+.navLink:hover {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+  text-decoration: none;
+}
+
+.navLinkOn {
+  background: var(--c-bg-active);
+  color: var(--c-text);
+  font-weight: 500;
+}
+
+.navSpacer {
+  flex: 1;
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-3) var(--s-2) 0;
+  border-top: 1px solid var(--c-border);
+}
+
+.identityLabel {
+  font-size: var(--t-xs);
+  color: var(--c-text-faint);
+}
+
+.main {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pageInner {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: var(--s-5) var(--s-5) var(--s-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.pageWide {
+  max-width: none;
+}
+
+.pageFull {
+  max-width: none;
+  height: 100%;
+  padding: 0;
+  gap: 0;
+}
+
+.pageTitle {
+  font-size: var(--t-2xl);
+  font-weight: 600;
+}
+
+.pageLead {
+  color: var(--c-text-muted);
+  font-size: var(--t-md);
+}
+
+.pageHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
