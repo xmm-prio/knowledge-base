@@ -101,12 +101,13 @@ class TestSearchKnowledge:
 
         found = await library.call("search_knowledge", query="脏数据", tags=["ascendc"])
 
-        assert [match.uri for match in found.matches] == ["learnings/ascendc/DataCopy 的对齐要求.md"]
+        uris = [match.uri for match in found.matches]
+        assert uris == ["learnings/ascendc/DataCopy 的对齐要求.md"]
 
     async def test_it_can_be_narrowed_to_one_category_of_observation(
         self, library: Library
     ) -> None:
-        """"What has bitten people" is a different question from "what has been verified"."""
+        """ "What has bitten people" is a different question from "what has been verified"."""
         both = Learning(
             title="尾块处理",
             summary="尾块要单独处理",
