@@ -210,7 +210,7 @@ class TestStartingUp:
             pass
 
         assert binary.actions[:3] == [
-            "config set watcher_enabled false",
+            "config set auto_watch false",
             "daemon stop",
             "spawn",
         ]

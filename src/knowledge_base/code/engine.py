@@ -13,6 +13,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from knowledge_base.code.upstream import UpstreamUnavailable
 from knowledge_base.layout import KnowledgeBaseRoot
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,12 @@ class CodeEngine:
         """Ask the upstream what it has. A silent binary must not hide what is on disk."""
         try:
             payload = self._upstream.call_tool("list_projects", {})
+        except UpstreamUnavailable:
+            # Not having an upstream is a state the caller is already told about, once, by
+            # whoever tried to start it. Repeating it here as a traceback on every listing
+            # would bury the reasons that are worth reading.
+            logger.debug("no upstream to list indexed repositories")
+            return set()
         except Exception:
             logger.warning("upstream could not list indexed repositories", exc_info=True)
             return set()

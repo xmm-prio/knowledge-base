@@ -107,3 +107,23 @@ class TestAgainstTheRealBinary:
         finally:
             session.close()
             binary.run("daemon", "stop")
+
+    def test_the_watcher_switch_is_a_key_the_upstream_actually_has(self, tmp_path: Path) -> None:
+        """`CbmBinary.run` swallows failures, so a renamed key would disable nothing and say so
+        only in a log line. This is the only place that can notice."""
+        root = KnowledgeBaseRoot(tmp_path)
+        root.initialize()
+        binary = CbmBinary(root)
+        if not binary.installed:
+            pytest.skip("codebase-memory-mcp is not installed")
+
+        finished = subprocess.run(
+            ["codebase-memory-mcp", "config", "set", "auto_watch", "false"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=upstream_environment(root),
+            cwd=root.path,
+        )
+
+        assert finished.returncode == 0, finished.stdout + finished.stderr

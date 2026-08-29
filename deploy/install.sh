@@ -69,7 +69,7 @@ if ! command -v codebase-memory-mcp >/dev/null 2>&1; then
     curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
 fi
 # We decide when a repository is reindexed; its own watcher would do it behind our back.
-codebase-memory-mcp config set watcher_enabled false || true
+codebase-memory-mcp config set auto_watch false || true
 codebase-memory-mcp daemon stop || true
 
 echo "==> Knowledge base root at $ROOT"

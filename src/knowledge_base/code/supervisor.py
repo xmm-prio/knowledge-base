@@ -135,6 +135,10 @@ class Supervisor:
 
         We decide when a repository is reindexed. The upstream reads this setting once, when
         its daemon starts, so a daemon left over from an earlier run has to go first.
+
+        The key is `auto_watch`. Upstream rejects unknown keys with a non-zero exit rather
+        than a failure we can catch, so a wrong name here disables nothing and says so only
+        in a log line nobody reads.
         """
-        self._binary.run("config", "set", "watcher_enabled", "false")
+        self._binary.run("config", "set", "auto_watch", "false")
         self._binary.run("daemon", "stop")

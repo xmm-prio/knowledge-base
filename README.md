@@ -77,7 +77,7 @@ cd /opt/knowledge-base/src/frontend && npm ci && npm run build
 
 # 5. 代码域上游（不装也能跑，只是代码域不可用）
 curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
-codebase-memory-mcp config set watcher_enabled false
+codebase-memory-mcp config set auto_watch false
 codebase-memory-mcp daemon stop
 
 # 6. 初始化根目录布局

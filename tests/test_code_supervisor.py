@@ -37,7 +37,7 @@ class TestStarting:
         supervised(binary)
 
         assert binary.actions == [
-            "config set watcher_enabled false",
+            "config set auto_watch false",
             "daemon stop",
             "spawn",
         ]
