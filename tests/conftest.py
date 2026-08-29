@@ -8,10 +8,49 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
 import pytest_asyncio
+
+from knowledge_base.code.process import EXECUTABLE, CbmBinary, upstream_environment
+from knowledge_base.layout import KnowledgeBaseRoot
 
 if TYPE_CHECKING:
     from api_harness import ApiHarness
+
+CACHE_CONFLICT = "different cache directory"
+"""How the upstream refuses when another daemon already holds this account's cache."""
+
+
+def set_auto_watch(root: KnowledgeBaseRoot) -> subprocess.CompletedProcess[str]:
+    """Ask the real binary to turn its watcher off, and hand back how that went."""
+    (root.runtime_dir / "cbm").mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        [EXECUTABLE, "config", "set", "auto_watch", "false"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=upstream_environment(root),
+        cwd=root.path,
+    )
+
+
+def require_upstream(root: KnowledgeBaseRoot) -> CbmBinary:
+    """The real binary, driven against this root -- or a skip saying why it cannot be.
+
+    Its coordinating daemon is per account and holds exactly one cache directory, while each
+    test builds its own root and therefore its own cache. So a knowledge-base service running
+    as the same user makes every one of these tests impossible, and that is worth saying out
+    loud rather than failing as if the code were broken.
+    """
+    binary = CbmBinary(root)
+    if not binary.installed:
+        pytest.skip("codebase-memory-mcp is not installed")
+    if CACHE_CONFLICT in set_auto_watch(root).stderr:
+        pytest.skip(
+            "another CBM daemon holds this account's cache: stop the knowledge-base service "
+            "(or run `codebase-memory-mcp daemon stop`) before driving the real binary"
+        )
+    return binary
 
 
 class ManualSleep:

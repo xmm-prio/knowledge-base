@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import require_upstream, set_auto_watch
 from knowledge_base.code.process import CbmBinary, PipeChannel, upstream_environment
 from knowledge_base.code.upstream import Session, UpstreamUnavailable
 from knowledge_base.layout import KnowledgeBaseRoot
@@ -96,9 +97,7 @@ class TestAgainstTheRealBinary:
         """The whole point of the seam is that this is the only test that needs the binary."""
         root = KnowledgeBaseRoot(tmp_path)
         root.initialize()
-        binary = CbmBinary(root)
-        if not binary.installed:
-            pytest.skip("codebase-memory-mcp is not installed")
+        binary = require_upstream(root)
 
         session = Session(binary.spawn())
         try:
@@ -113,17 +112,9 @@ class TestAgainstTheRealBinary:
         only in a log line. This is the only place that can notice."""
         root = KnowledgeBaseRoot(tmp_path)
         root.initialize()
-        binary = CbmBinary(root)
-        if not binary.installed:
-            pytest.skip("codebase-memory-mcp is not installed")
+        require_upstream(root)
 
-        finished = subprocess.run(
-            ["codebase-memory-mcp", "config", "set", "auto_watch", "false"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            env=upstream_environment(root),
-            cwd=root.path,
-        )
+        finished = set_auto_watch(root)
 
+        assert "unknown config key" not in finished.stderr, finished.stderr
         assert finished.returncode == 0, finished.stdout + finished.stderr

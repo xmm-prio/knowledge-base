@@ -11,15 +11,14 @@ the binary is not installed.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import httpx
 import pytest
 from fastmcp import Client
 
-from conftest import commits, files_in
-from knowledge_base.code.process import EXECUTABLE, CbmBinary
+from conftest import commits, files_in, require_upstream
+from knowledge_base.code.process import CbmBinary
 from knowledge_base.layout import KnowledgeBaseRoot
 from service_harness import served
 
@@ -93,11 +92,12 @@ class TestTheCodePath:
     """
 
     async def test_an_agent_searches_reads_and_traces_a_symbol(self, tmp_path: Path) -> None:
-        if shutil.which(EXECUTABLE) is None:
-            pytest.skip(f"{EXECUTABLE} is not installed")
+        root = KnowledgeBaseRoot(tmp_path)
+        root.initialize()
+        require_upstream(root)
 
         repository = tmp_path / "codebase" / REPOSITORY
-        repository.mkdir(parents=True)
+        repository.mkdir(parents=True, exist_ok=True)
         (repository / "main.c").write_text(SOURCE, encoding="utf-8")
 
         async with served(tmp_path, binary=CbmBinary(KnowledgeBaseRoot(tmp_path))) as address:

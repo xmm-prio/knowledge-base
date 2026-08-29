@@ -239,15 +239,19 @@ sudo -u knowledge-base git clone <仓库> /srv/knowledge-base/codebase/demo
 curl -X POST localhost:8080/api/code/repos/demo/index      # 返回 {"repo":"demo","ok":true,...}
 
 # 3. 跑那条被跳过的测试（它会自己起服务、自己建索引）
+#    注意：CBM 的协调守护进程每账户只认一个 cache 目录，测试用的是自己的临时目录，
+#    所以同账户下正在跑的知识库服务必须先停，否则上游会直接拒绝，测试只能跳过。
+sudo systemctl stop knowledge-base
 cd /opt/knowledge-base/src
 /opt/knowledge-base/venv/bin/python -m pytest tests/test_acceptance.py -m upstream_binary -v
+sudo systemctl start knowledge-base
 
 # 4. 或者用真实的 agent 走一遍：在 opencode 里连上 kb，依次问
 #    「kb 里有哪些代码库」→「demo 的架构是什么样」→「找一下 XXX 这个函数」
 #    →「读一下它的源码」→「谁调用了它」
 ```
 
-第 3 步应当是 `1 passed`。如果是 `skipped`，说明 `codebase-memory-mcp` 不在 `PATH` 上。
+第 3 步应当是 `1 passed`。跳过时测试会说明原因：要么 `codebase-memory-mcp` 不在 `PATH` 上，要么同账户下还有别的 CBM 守护进程占着 cache（`codebase-memory-mcp daemon stop` 之后重试）。
 
 ## 开发
 
