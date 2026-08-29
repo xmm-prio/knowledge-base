@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
@@ -215,3 +216,56 @@ class Service:
                 yield
         finally:
             await self.stop()
+
+
+@asynccontextmanager
+async def document_domain(root: KnowledgeBaseRoot) -> AsyncIterator[DocumentService]:
+    """The document side alone, started and stopped around one piece of work.
+
+    A command that only touches documents has no business starting the code upstream: it costs
+    a subprocess, and its coordination daemon allows one cache directory per account, so
+    starting it needlessly is enough to lock someone else out (ADR-0007).
+
+    Reading the knowledge base in is part of starting it, exactly as it is for `Service`: the
+    search index is in memory and holds nothing until the files are read, so a domain that has
+    not been rebuilt is one that answers every question with nothing.
+    """
+    root.initialize()
+    documents = DocumentService(root)
+    await documents.start()
+    try:
+        await documents.rebuild()
+        yield documents
+    finally:
+        # Stopping is what flushes the debounced commit, so it is never optional.
+        await documents.stop()
+
+
+@dataclass(frozen=True)
+class CodeSide:
+    """The code domain as anyone assembling it needs it: what to ask, and whether it is there.
+
+    The two travel together everywhere -- the REST layer takes the engine and the health probe
+    as separate arguments, and a caller that has one always wants the other.
+    """
+
+    engine: CodeEngine
+    upstream: SupervisedUpstream
+
+
+@asynccontextmanager
+async def code_domain(
+    root: KnowledgeBaseRoot, binary: Binary | None = None
+) -> AsyncIterator[CodeSide]:
+    """The code side alone, started and stopped around one piece of work.
+
+    The mirror of the above: indexing a repository does not need the document graph, whose
+    upstream costs several seconds of migrations and model loading to bring up.
+    """
+    root.initialize()
+    upstream = SupervisedUpstream(Supervisor(binary or CbmBinary(root)))
+    upstream.start()
+    try:
+        yield CodeSide(CodeEngine(root, upstream), upstream)
+    finally:
+        upstream.stop()

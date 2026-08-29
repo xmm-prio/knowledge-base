@@ -72,6 +72,15 @@ class TestReindexCode:
         assert result.exit_code == 0
         assert "codebase/ 下没有代码库" in result.stdout
 
+    def test_it_leaves_the_document_graph_alone(self, tmp_path: Path) -> None:
+        """Indexing code has no reason to pay for the document upstream's migrations, and its
+        directory appearing is the only evidence that it was started at all."""
+        place(tmp_path, "learnings/ascendc/对齐要求.md")
+
+        runner.invoke(app, ["reindex", "code", "--root", str(tmp_path)])
+
+        assert not (tmp_path / ".knowledge-base" / "basic-memory").exists()
+
 
 class TestStatus:
     def test_it_reports_the_size_of_the_knowledge_base(self, tmp_path: Path) -> None:

@@ -1,9 +1,12 @@
 """The command line an operator uses on the server.
 
 Four things an operator ever does: create a knowledge base, run it, rebuild an index that has
-drifted, and ask what state it is in. Everything below builds the same `Service` the running
-process is; the one-shot commands just drive its lifecycle themselves instead of leaving it to
-uvicorn.
+drifted, and ask what state it is in.
+
+`server` builds the whole `Service` and hands its lifecycle to uvicorn. The one-shot commands
+bring up only the domain they touch: rebuilding a code index has no reason to start the
+document graph, which costs several seconds of migrations, and no reason to hold the upstream's
+per-account cache while doing it (ADR-0007).
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import uvicorn
 from knowledge_base import __version__
 from knowledge_base.api.system import opencode_config
 from knowledge_base.layout import KnowledgeBaseRoot
-from knowledge_base.server import MCP_PATH, Service
+from knowledge_base.server import MCP_PATH, Service, code_domain, document_domain
 
 logger = logging.getLogger(__name__)
 
@@ -59,26 +62,14 @@ def _root(path: Path) -> KnowledgeBaseRoot:
     return KnowledgeBaseRoot(path.resolve())
 
 
-def _offline[T](root: Path, work: Callable[[Service], Awaitable[T]]) -> T:
-    """Run one piece of work against a fully started service, then shut it down again.
-
-    The same assembly the server runs, so a reindex from the command line sees exactly what
-    the running service would see -- including a flushed commit on the way out.
+def _offline[T](work: Callable[[], Awaitable[T]]) -> T:
+    """Run one piece of asynchronous work to completion, and get the process back.
 
     Driven by anyio rather than `asyncio.run`, because the upstream document graph reaches
     for anyio's worker threads and those are only released when anyio owns the loop. Under
     `asyncio.run` they are left behind as non-daemon threads and the command never exits.
     """
-
-    async def run() -> T:
-        service = Service(_root(root))
-        await service.start()
-        try:
-            return await work(service)
-        finally:
-            await service.stop()
-
-    return anyio.run(run)
+    return anyio.run(work)
 
 
 @app.command(help="只初始化知识库根目录的布局，不启动服务")
@@ -111,22 +102,28 @@ def server(
 @reindex.command("documents", help="重建文档检索索引与知识图谱")
 def reindex_documents(root: Root = Path(), verbose: Verbose = False) -> None:
     _configure_logging(verbose)
-    indexed = _offline(root, lambda service: service.documents.rebuild())
-    typer.echo(f"已索引 {indexed} 篇文档")
+
+    async def rebuild() -> int:
+        # Entering the domain is the rebuild: reading every document in is what starting it means.
+        async with document_domain(_root(root)) as documents:
+            return (await documents.size()).documents
+
+    typer.echo(f"已索引 {_offline(rebuild)} 篇文档")
 
 
 @reindex.command("code", help="重建代码库索引；不指定 --repo 则重建全部")
 def reindex_code(root: Root = Path(), repo: Repo = None, verbose: Verbose = False) -> None:
     _configure_logging(verbose)
 
-    async def rebuild(service: Service) -> list[tuple[str, bool]]:
-        if repo is not None:
-            one = await asyncio.to_thread(service.code.rebuild, repo)
-            return [(one.repo, one.ok)]
-        every = await asyncio.to_thread(lambda: list(service.code.rebuild_all()))
-        return [(outcome.repo, outcome.ok) for outcome in every]
+    async def rebuild() -> list[tuple[str, bool]]:
+        async with code_domain(_root(root)) as code:
+            if repo is not None:
+                one = await asyncio.to_thread(code.engine.rebuild, repo)
+                return [(one.repo, one.ok)]
+            every = await asyncio.to_thread(lambda: list(code.engine.rebuild_all()))
+            return [(outcome.repo, outcome.ok) for outcome in every]
 
-    outcomes = _offline(root, rebuild)
+    outcomes = _offline(rebuild)
     if not outcomes:
         typer.echo("codebase/ 下没有代码库")
     for name, ok in outcomes:
@@ -137,18 +134,21 @@ def reindex_code(root: Root = Path(), repo: Repo = None, verbose: Verbose = Fals
 def status(root: Root = Path(), host: Host = DEFAULT_HOST, port: Port = DEFAULT_PORT) -> None:
     _configure_logging()
 
-    async def look(service: Service) -> tuple[int, int, bool, int, int]:
-        size = await service.documents.size()
-        repos = await asyncio.to_thread(service.code.list_repos)
+    async def look() -> tuple[int, int, bool, int, int]:
+        async with document_domain(_root(root)) as documents:
+            size = await documents.size()
+        async with code_domain(_root(root)) as code:
+            repos = await asyncio.to_thread(code.engine.list_repos)
+            reachable = code.upstream.running
         return (
             size.documents,
             size.observations,
-            service.upstream.running,
+            reachable,
             len(repos),
             sum(1 for one in repos if one.indexed),
         )
 
-    documents, observations, upstream, repos, indexed = _offline(root, look)
+    documents, observations, upstream, repos, indexed = _offline(look)
     reachable = "localhost" if host in ("0.0.0.0", "::") else host
     url = f"http://{reachable}:{port}{MCP_PATH}"
     typer.echo(f"根目录：{_root(root).path}")
