@@ -57,7 +57,10 @@ sudo ./deploy/install.sh /srv/knowledge-base
 如果不想跑脚本，等价的步骤是：
 
 ```bash
-# 1. 系统依赖
+# 1. 系统依赖。Ubuntu 22.04 的 apt 里没有 python3.12（24.04 起才自带），
+#    先加 deadsnakes；它只是多装一个解释器，不会替换系统 python。
+sudo apt-get install -y software-properties-common
+sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt-get install -y python3.12 python3.12-venv git curl
 
 # 2. 服务用户与知识库根目录
@@ -248,8 +251,10 @@ cd /opt/knowledge-base/src
 
 ## 开发
 
+需要 **Python 3.12 或更高**——这是上游 basic-memory 的硬性要求，不是本项目的偏好。手上只有 3.11 时，用 `uv python install 3.12 && uv venv --python 3.12` 装一个独立解释器，或者走上面 deadsnakes 那条路。
+
 ```bash
-python -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest
 .venv/bin/ruff check src tests && .venv/bin/ruff format --check src tests

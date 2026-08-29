@@ -27,7 +27,18 @@ fi
 
 echo "==> System packages"
 apt-get update -qq
-apt-get install -y -qq python3.12 python3.12-venv git curl
+apt-get install -y -qq git curl
+
+# basic-memory requires Python 3.12, which Ubuntu ships in apt only from 24.04 onwards.
+# On 22.04 the interpreter has to come from somewhere else; deadsnakes is the least
+# surprising source, and it never replaces the system python.
+if ! command -v python3.12 >/dev/null 2>&1; then
+    echo "    python3.12 is absent: adding the deadsnakes PPA"
+    apt-get install -y -qq software-properties-common
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update -qq
+fi
+apt-get install -y -qq python3.12 python3.12-venv
 
 echo "==> Service user and directories"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home-dir "$ROOT" --shell /usr/sbin/nologin "$SERVICE_USER"
