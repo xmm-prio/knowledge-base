@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from fastmcp.exceptions import ToolError
 
+from knowledge_base.code.upstream import UpstreamUnavailable
 from mcp_harness import Library, StubUpstream, library, running
 
 __all__ = ["library"]
@@ -52,14 +53,14 @@ class TestAsking:
     async def test_searching_by_symbol_is_the_default_and_text_search_is_asked_for(
         self, mops: Library
     ) -> None:
-        await mops.call("search_code", query="DataCopy.*", repo="mops")
-        await mops.call("search_code", query="DataCopy.*", repo="mops", mode="text")
+        await mops.call("search_code", query="DataCopyPad", repo="mops")
+        await mops.call("search_code", query="DataCopyPad", repo="mops", mode="text")
 
         assert mops.upstream.arguments_for("search_graph") == [
-            {"name_pattern": "DataCopy.*", "project": "mops"}
+            {"name_pattern": "DataCopyPad", "project": "mops"}
         ]
         assert mops.upstream.arguments_for("search_code") == [
-            {"query": "DataCopy.*", "project": "mops"}
+            {"query": "DataCopyPad", "project": "mops"}
         ]
 
     async def test_reading_a_symbol_asks_for_it_by_qualified_name(self, mops: Library) -> None:
@@ -119,6 +120,37 @@ class TestStayingUp:
             await mops.call("get_architecture", repo="mops")
 
         assert await mops.call("list_repos") is not None
+
+    async def test_a_missing_binary_is_not_reported_as_a_bad_question(self, mops: Library) -> None:
+        """An agent that thinks it mistyped will keep retyping. It has to be told to stop."""
+        mops.upstream.answers["search_graph"] = UpstreamUnavailable("the binary is gone")
+
+        with pytest.raises(ToolError, match="上游"):
+            await mops.call("search_code", query="Run")
+
+    async def test_a_bad_pattern_says_so_and_can_be_quoted(self, mops: Library) -> None:
+        with pytest.raises(ToolError, match="正则"):
+            await mops.call("search_code", query="Run(", mode="regex")
+
+
+class TestNamesAnAgentAsksWith:
+    async def test_a_search_result_carries_the_name_to_ask_with(self, mops: Library) -> None:
+        mops.upstream.answers["search_graph"] = {
+            "results": [{"qualified_name": "_srv_kb_mops_src.copy.Run", "project": "mops"}]
+        }
+
+        answer = await mops.call("search_code", query="Run", repo="mops")
+
+        (one,) = answer.payload["matches"]
+        assert one["canonical_qn"] == "_srv_kb_mops_src.copy.Run"
+        assert one["display_qn"] == "mops.copy.Run"
+
+    async def test_the_short_name_is_refused_where_the_canonical_one_belongs(
+        self, mops: Library
+    ) -> None:
+        """Otherwise the shortening we do for readability silently breaks the next call."""
+        with pytest.raises(ToolError, match="canonical_qn"):
+            await mops.call("read_symbol", qualified_name="mops.copy.Run#a1b2c3")
 
 
 class SlowUpstream(StubUpstream):

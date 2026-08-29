@@ -24,6 +24,26 @@ every capability we use has been in the protocol since its first revision."""
 DEFAULT_TIMEOUT = 600.0
 """Seconds to wait for one reply. Indexing a large repository is minutes of silence."""
 
+REPLAYABLE_TOOLS = frozenset(
+    {
+        "list_projects",
+        "get_architecture",
+        "search_graph",
+        "search_code",
+        "get_code_snippet",
+        "trace_path",
+        "query_graph",
+    }
+)
+"""Upstream tools that only ask questions, and may therefore be asked a second time.
+
+A connection that drops mid-call says nothing about whether the call ran, so replaying one
+that changes the upstream's index can index a repository twice or half-index it and report
+success. Anything not named here is left un-replayed and its failure is handed back with
+enough to act on. A tool added upstream and not added here is treated as a change, which is
+the safe way round.
+"""
+
 
 class UpstreamError(RuntimeError):
     """The upstream did not give us the answer we asked for."""

@@ -1,9 +1,10 @@
 """What the operator's status page needs.
 
 Three questions: is anything broken, how much is actually indexed, and what does a colleague
-have to paste into their opencode.json. The last one is generated from the request rather
-than from configuration, so the snippet is correct for whatever address the browser reached
-the service on -- there is nothing to keep in step and nothing to get wrong by hand.
+have to paste into their opencode.json. The last one comes from the address resolver rather
+than from the request that asked for it: a snippet is copied out of this page into files that
+travel, so it has to name the address everyone can reach rather than the hostname one browser
+happened to use. See `knowledge_base.address`.
 """
 
 from __future__ import annotations
@@ -12,9 +13,10 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from pydantic import BaseModel
 
+from knowledge_base.address import NoRouteOutward
 from knowledge_base.api.code import IndexRunReply, outcome
 from knowledge_base.api.dependencies import Bound, Domains
 
@@ -59,8 +61,12 @@ class McpStatus(BaseModel):
     """What a colleague needs in order to point their agent at this service."""
 
     url: str
+    """Empty when this machine has no address worth handing out; `error` says why."""
+
     opencode_config: str
     """The whole opencode.json fragment, ready to copy."""
+
+    error: str | None = None
 
 
 class StatusReply(BaseModel):
@@ -124,13 +130,22 @@ async def _code_status(bound: Domains) -> CodeStatus:
     )
 
 
+def _mcp_status(bound: Domains) -> McpStatus:
+    try:
+        reachable = bound.address.advertised()
+    except NoRouteOutward as unknown:
+        logger.warning("no address to hand out: %s", unknown)
+        return McpStatus(url="", opencode_config="", error=str(unknown))
+    url = reachable.url(f"/{MCP_PATH}")
+    return McpStatus(url=url, opencode_config=opencode_config(url))
+
+
 @router.get("/status", summary="上游健康状况、索引规模与 MCP 接入片段")
-async def status(request: Request, bound: Bound) -> StatusReply:
-    url = f"{str(request.base_url).rstrip('/')}/{MCP_PATH}"
+async def status(bound: Bound) -> StatusReply:
     return StatusReply(
         documents=await _documents_status(bound),
         code=await _code_status(bound),
-        mcp=McpStatus(url=url, opencode_config=opencode_config(url)),
+        mcp=_mcp_status(bound),
     )
 
 

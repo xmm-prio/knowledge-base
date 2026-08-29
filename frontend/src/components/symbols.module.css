@@ -1,0 +1,59 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.dropped {
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--c-bg-hover);
+  color: var(--c-text-muted);
+  font-size: var(--t-sm);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+}
+
+.row:hover {
+  background: var(--c-bg-hover);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.name {
+  font-family: var(--f-mono);
+  font-size: var(--t-md);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.kind,
+.repo {
+  font-size: var(--t-xs);
+  color: var(--c-text-faint);
+}
+
+.where {
+  font-family: var(--f-mono);
+  font-size: var(--t-xs);
+  color: var(--c-text-muted);
+  word-break: break-all;
+}
+
+.actions {
+  display: flex;
+  gap: var(--s-1);
+  flex-wrap: wrap;
+}

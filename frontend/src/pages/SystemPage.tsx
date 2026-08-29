@@ -147,17 +147,24 @@ export function SystemPage() {
 
       <Card>
         <Panel title="MCP 接入" note="同事把这段贴进自己的 opencode.json 即可">
-          <div className={css.mcpUrl}>
-            <div className={css.url}>{mcp.url}</div>
-            <CopyButton text={mcp.url} label="复制地址" />
-          </div>
-          <pre className={css.config}>{mcp.opencode_config}</pre>
-          <div className={css.actions}>
-            <CopyButton text={mcp.opencode_config} label="复制 opencode 配置" />
-          </div>
-          <div className={css.note}>
-            地址由浏览器访问到的主机名生成，所以复制出来的就是对方能连上的那一个。
-          </div>
+          {mcp.error ? (
+            <ErrorNotice title="没有可对外提供的地址" error={new Error(mcp.error)} />
+          ) : (
+            <>
+              <div className={css.mcpUrl}>
+                <div className={css.url}>{mcp.url}</div>
+                <CopyButton text={mcp.url} label="复制地址" />
+              </div>
+              <pre className={css.config}>{mcp.opencode_config}</pre>
+              <div className={css.actions}>
+                <CopyButton text={mcp.opencode_config} label="复制 opencode 配置" />
+              </div>
+              <div className={css.note}>
+                地址取自本机默认路由所在网卡的 IPv4，与你用什么主机名打开这个页面无关，
+                所以复制走的配置换台机器也仍然指向这里。
+              </div>
+            </>
+          )}
         </Panel>
       </Card>
     </Page>

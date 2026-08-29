@@ -4,11 +4,14 @@ This is the seam the MCP tools and the REST API both sit on: every question abou
 source code goes through here, and the upstream binary is never visible past it.
 """
 
+import re
 from pathlib import Path
 
 import pytest
 
+from knowledge_base.code.answers import CallChain, SymbolMatches
 from knowledge_base.code.engine import CodeEngine, Direction, SearchMode, UnknownRepo
+from knowledge_base.code.failures import InvalidQuery
 from knowledge_base.layout import KnowledgeBaseRoot
 
 
@@ -86,6 +89,40 @@ class TestListRepos:
             "mops": True,
             "fresh": False,
         }
+
+    def test_the_upstream_naming_a_repo_by_path_is_the_same_repo(
+        self, root: KnowledgeBaseRoot
+    ) -> None:
+        """The upstream reports back whatever path it was handed, and it was handed absolutes."""
+        place_repo(root, "mops")
+        listing = {"projects": [{"name": str(root.codebase_dir / "mops")}]}
+
+        engine = CodeEngine(root, FakeUpstream({"list_projects": listing}))
+
+        assert [repo.indexed for repo in engine.list_repos()] == [True]
+
+    def test_a_repo_the_upstream_lists_but_cannot_search_is_not_indexed(
+        self, root: KnowledgeBaseRoot
+    ) -> None:
+        """Listed means it remembers indexing it. Indexed, on screen, has to mean answerable."""
+        place_repo(root, "mops")
+        upstream = FakeUpstream({"list_projects": {"projects": [{"name": "mops"}]}})
+        upstream.failing.add("search_graph")
+
+        engine = CodeEngine(root, upstream)
+
+        assert [repo.indexed for repo in engine.list_repos()] == [False]
+
+    def test_a_repo_the_upstream_never_heard_of_costs_no_probe(
+        self, root: KnowledgeBaseRoot
+    ) -> None:
+        """A knowledge base of unindexed sources must not pay a round trip per directory."""
+        place_repo(root, "fresh")
+        upstream = FakeUpstream({"list_projects": {"projects": []}})
+
+        CodeEngine(root, upstream).list_repos()
+
+        assert upstream.arguments_for("search_graph") == []
 
     def test_it_survives_an_upstream_that_cannot_answer(self, root: KnowledgeBaseRoot) -> None:
         """A dead binary must not hide the repos an operator can see in the filesystem."""
@@ -186,20 +223,22 @@ class TestAsking:
         self, engine: CodeEngine, upstream: FakeUpstream
     ) -> None:
         """The two modes are different upstream tools, which is exactly why we hide them."""
-        engine.search_code("DataCopy.*", mode=SearchMode.SYMBOL, repo="mops")
-        engine.search_code("DataCopy.*", mode=SearchMode.TEXT, repo="mops")
+        engine.search_code("DataCopyPad", mode=SearchMode.SYMBOL, repo="mops")
+        engine.search_code("DataCopyPad", mode=SearchMode.TEXT, repo="mops")
 
         assert upstream.arguments_for("search_graph") == [
-            {"name_pattern": "DataCopy.*", "project": "mops"}
+            {"name_pattern": "DataCopyPad", "project": "mops"}
         ]
-        assert upstream.arguments_for("search_code") == [{"query": "DataCopy.*", "project": "mops"}]
+        assert upstream.arguments_for("search_code") == [
+            {"query": "DataCopyPad", "project": "mops"}
+        ]
 
     def test_a_search_without_a_repo_spans_every_indexed_one(
         self, engine: CodeEngine, upstream: FakeUpstream
     ) -> None:
-        engine.search_code("DataCopy.*")
+        engine.search_code("DataCopyPad")
 
-        assert upstream.arguments_for("search_graph") == [{"name_pattern": "DataCopy.*"}]
+        assert upstream.arguments_for("search_graph") == [{"name_pattern": "DataCopyPad"}]
 
     def test_reading_a_symbol_asks_for_it_by_qualified_name(
         self, engine: CodeEngine, upstream: FakeUpstream
@@ -259,6 +298,89 @@ class TestAsking:
         )
 
         assert answer.payload == payload
+
+
+class TestWhatWasTyped:
+    """What a member types is a name they remember, not a pattern they wrote."""
+
+    def test_a_symbol_search_takes_punctuation_literally(
+        self, engine: CodeEngine, upstream: FakeUpstream
+    ) -> None:
+        """`DataCopy(dst` is a syntax error as a pattern and a fine thing to remember."""
+        engine.search_code("DataCopy(dst", repo="mops")
+
+        (asked,) = upstream.arguments_for("search_graph")
+        assert re.fullmatch(str(asked["name_pattern"]), "DataCopy(dst")
+
+    def test_a_text_search_reaches_the_grep_as_typed(
+        self, engine: CodeEngine, upstream: FakeUpstream
+    ) -> None:
+        engine.search_code("DataCopy(dst", mode=SearchMode.TEXT, repo="mops")
+
+        assert upstream.arguments_for("search_code") == [
+            {"query": "DataCopy(dst", "project": "mops"}
+        ]
+
+    def test_a_regex_is_only_a_regex_when_it_was_asked_for(
+        self, engine: CodeEngine, upstream: FakeUpstream
+    ) -> None:
+        engine.search_code("DataCopy.*Pad", mode=SearchMode.REGEX, repo="mops")
+
+        assert upstream.arguments_for("search_graph") == [
+            {"name_pattern": "DataCopy.*Pad", "project": "mops"}
+        ]
+
+    def test_a_broken_regex_is_refused_here_and_says_where(self, engine: CodeEngine) -> None:
+        """Otherwise it comes back as whatever the upstream makes of it, which is nothing."""
+        with pytest.raises(InvalidQuery, match="正则"):
+            engine.search_code("DataCopy(", mode=SearchMode.REGEX, repo="mops")
+
+    def test_an_empty_search_never_reaches_the_upstream(
+        self, engine: CodeEngine, upstream: FakeUpstream
+    ) -> None:
+        with pytest.raises(InvalidQuery):
+            engine.search_code("   ", repo="mops")
+        assert upstream.calls == []
+
+
+class TestNamesGoingBackUp:
+    """A short name is for reading. Asking with one has to fail loudly, not quietly."""
+
+    def test_search_results_come_back_under_both_names(self, root: KnowledgeBaseRoot) -> None:
+        place_repo(root, "mops")
+        found = {"results": [{"qualified_name": "_srv_kb_mops_src.copy.Run", "project": "mops"}]}
+
+        answer = CodeEngine(root, FakeUpstream({"search_graph": found})).search_code(
+            "Run", repo="mops"
+        )
+
+        found_symbols = answer.payload
+        assert isinstance(found_symbols, SymbolMatches)
+        (one,) = found_symbols.matches
+        assert (one.canonical_qn, one.display_qn) == ("_srv_kb_mops_src.copy.Run", "mops.copy.Run")
+
+    def test_reading_by_a_disambiguated_short_name_is_refused(self, engine: CodeEngine) -> None:
+        with pytest.raises(InvalidQuery, match="canonical_qn"):
+            engine.read_symbol("mops.copy.Run#a1b2c3")
+
+    def test_tracing_from_a_disambiguated_short_name_is_refused_too(
+        self, engine: CodeEngine
+    ) -> None:
+        with pytest.raises(InvalidQuery, match="canonical_qn"):
+            engine.trace_calls("mops.copy.Run#a1b2c3")
+
+    def test_a_traced_chain_arrives_as_nodes_and_edges(self, root: KnowledgeBaseRoot) -> None:
+        place_repo(root, "mops")
+        traced = {"paths": [[{"qn": "a.Top"}, {"qn": "b.Leaf"}]]}
+
+        answer = CodeEngine(root, FakeUpstream({"trace_path": traced})).trace_calls(
+            "b.Leaf", repo="mops"
+        )
+
+        chain = answer.payload
+        assert isinstance(chain, CallChain)
+        assert [(one.caller, one.callee) for one in chain.edges] == [("a.Top", "b.Leaf")]
+        assert chain.root == "b.Leaf"
 
 
 class TestHonesty:

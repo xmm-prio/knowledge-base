@@ -8,10 +8,11 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Hit, SearchMode, SearchReply } from "../api/types";
 import { CodeAnswer } from "../components/CodeAnswer";
+import { SymbolMatchesView } from "../components/SymbolMatchesView";
 import { useAsync } from "../hooks/useAsync";
 import { routes } from "../routes";
 import { Button, Empty, ErrorNotice, Field, Input, Loading, Panel, Segmented, Select } from "../ui";
@@ -21,6 +22,7 @@ import css from "./search.module.css";
 const MODES: { value: SearchMode; label: string }[] = [
   { value: "symbol", label: "符号" },
   { value: "text", label: "全文" },
+  { value: "regex", label: "正则" },
 ];
 
 interface Group {
@@ -47,6 +49,7 @@ function groupByPath(hits: Hit[]): Group[] {
 }
 
 export function SearchPage() {
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const query = params.get("q") ?? "";
   const mode = (params.get("mode") as SearchMode) ?? "symbol";
@@ -150,7 +153,16 @@ export function SearchPage() {
                 loading={results.loading}
                 error={results.error}
                 empty="代码侧没有命中"
-              />
+              >
+                {mode === "text"
+                  ? undefined
+                  : (payload) => (
+                      <SymbolMatchesView
+                        payload={payload}
+                        onRead={(canonical) => navigate(routes.code(canonical))}
+                      />
+                    )}
+              </CodeAnswer>
             </Panel>
           </div>
         </div>

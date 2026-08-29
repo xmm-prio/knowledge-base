@@ -17,6 +17,8 @@ from pathlib import Path
 import httpx
 import uvicorn
 
+from api_harness import ADVERTISED_HOST, ADVERTISED_PORT
+from knowledge_base.address import Address, FixedAddress
 from knowledge_base.code.supervisor import Binary
 from knowledge_base.layout import KnowledgeBaseRoot
 from knowledge_base.server import Service
@@ -54,6 +56,7 @@ async def assembled(
         KnowledgeBaseRoot(path),
         binary=upstream,
         frontend=frontend if frontend is not None else path / NO_FRONTEND,
+        address=FixedAddress(ADVERTISED_HOST, ADVERTISED_PORT),
     )
     application = service.application
     async with application.router.lifespan_context(application):
@@ -63,8 +66,17 @@ async def assembled(
 
 
 @asynccontextmanager
-async def served(path: Path, binary: Binary | None = None) -> AsyncIterator[str]:
+async def served(
+    path: Path,
+    binary: Binary | None = None,
+    frontend: Path | None = None,
+    address: Address | None = None,
+) -> AsyncIterator[str]:
     """The same assembly behind a real HTTP server, yielding the address it listens on.
+
+    What it *listens* on and what it *advertises* are two different things, which is the whole
+    point of the resolver: the socket is a loopback port picked by the kernel, and the address
+    handed to a member is stated -- or, in the release gate, resolved for real.
 
     Leaving this block shuts the service down the way systemd does, which is when the
     debounced commit is flushed -- so history can be asserted on afterwards.
@@ -72,7 +84,8 @@ async def served(path: Path, binary: Binary | None = None) -> AsyncIterator[str]
     service = Service(
         KnowledgeBaseRoot(path),
         binary=binary if binary is not None else FakeBinary(),
-        frontend=path / NO_FRONTEND,
+        frontend=frontend if frontend is not None else path / NO_FRONTEND,
+        address=address if address is not None else FixedAddress(ADVERTISED_HOST, ADVERTISED_PORT),
     )
     server = uvicorn.Server(
         uvicorn.Config(service.application, host="127.0.0.1", port=0, log_config=None)

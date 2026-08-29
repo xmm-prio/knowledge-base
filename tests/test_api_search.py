@@ -44,14 +44,18 @@ async def test_a_document_hit_carries_what_progressive_disclosure_needs(api: Api
     assert "text" not in hit
 
 
-async def test_the_code_group_passes_the_upstream_payload_through(api: ApiHarness) -> None:
-    """The upstream's JSON shape is not ours to reshape, so it crosses verbatim."""
+async def test_the_code_group_names_its_hits_twice(api: ApiHarness) -> None:
+    """A hit has to be readable on screen and still usable as the next question."""
     api.place_repo("mops")
-    api.upstream.answers["search_graph"] = {"matches": [{"name": "DataCopyPad"}]}
+    api.upstream.answers["search_graph"] = {
+        "matches": [{"qualified_name": "_srv_kb_mops_src.copy.DataCopyPad", "project": "mops"}]
+    }
 
     body = (await api.client.get("/api/search", params={"q": "DataCopy"})).json()
 
-    assert body["code"]["payload"] == {"matches": [{"name": "DataCopyPad"}]}
+    (one,) = body["code"]["payload"]["matches"]
+    assert one["canonical_qn"] == "_srv_kb_mops_src.copy.DataCopyPad"
+    assert one["display_qn"] == "mops.copy.DataCopyPad"
 
 
 async def test_code_search_can_be_narrowed_to_one_repository_and_switched_to_text(

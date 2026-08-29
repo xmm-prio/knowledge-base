@@ -7,7 +7,9 @@
 - 一个网页 UI，给人用
 - 一个 MCP 端点，给组员的 agent 用（大多是 opencode）
 
-**服务不做认证**，靠内网隔离。不要把它暴露到公网。
+**服务不做认证**，靠内网隔离。不要把它暴露到公网。它默认监听 `0.0.0.0`，也就是同一局域网里的任何人都能直接连上并读写 `learnings/`——这是被明确接受的前提，前提是这个网段本身可信。不满足就用 `--host` 绑到具体网卡，或者在前面挡一层。
+
+对外要用哪个地址，服务自己算，不看请求里的 `Host`：取默认路由那张网卡的 IPv4。所以网页状态页、`knowledge-base status` 和日志里的 MCP 端点永远是同一个，组员从任何一台机器打开页面，抄到的都是同一段配置。这台机器要是没有默认路由（或者只有 IPv6），它会直说找不到，而不是编一个连不上的地址出来。
 
 ## 它解决什么问题
 
@@ -104,6 +106,20 @@ curl -s localhost:8080/api/system/status
 
 `TimeoutStopSec=180` 也不要调小：停止时先把防抖队列里没提交的改动 flush 进 git，再等上游守护进程释放其它会话，后者上游允许自己等到两分钟。
 
+### 代码域会占多少资源
+
+一个 `codebase-memory-mcp` 进程同一时刻只答一个问题——两个调用共用一对管道会互相读到对方的回复。所以服务自己维护一个有界的长驻会话池：
+
+| 上限 | 值 | 什么意思 |
+| --- | --- | --- |
+| 长驻会话数 | 4 | 最多同时开 4 个上游子进程。按需增长，启动时只开第一个 |
+| 每会话在途调用 | 1 | 一条会话同时只服务一个调用，回复不会串台 |
+| 池内并发调用 | 20 | 超过就排队；排到 10 分钟还没轮上，明说上游饱和而不是继续堆线程 |
+
+四个会话共用同一个 cache 目录和同一个协调守护进程，这是 [ADR-0007](docs/adr/0007-supervise-the-upstream-as-a-long-lived-mcp-server.md) 的硬约束：池里绝不能混用 cache，也不能混用二进制版本。
+
+只读调用（列项目、搜索、读符号、追调用链、图查询、架构）遇到断连会重连并重试一次。`index_repository` 不重试——它改索引，重放一次可能是半个索引，所以断了就如实返回失败让调用方重来。
+
 ## 命令
 
 | 命令 | 作用 |
@@ -168,14 +184,20 @@ curl -s localhost:8080/api/system/status
 
 | 工具 | 干什么 | 什么时候用 |
 | --- | --- | --- |
-| `list_repos` | 列出已纳管的代码库，以及各自是否已建好索引 | 不知道有哪些库时 |
+| `list_repos` | 列出已纳管的代码库，以及各自是否**现在就查得动** | 不知道有哪些库时 |
 | `get_architecture` | 一个代码库的整体结构：语言、包、入口、热点 | 面对陌生仓库的第一步 |
-| `search_code` | 找代码。`mode=symbol` 按声明名匹配正则（默认），`mode=text` 在源码里搜文本 | 记得名字用 symbol，只记得片段或要搜注释用 text |
-| `read_symbol` | 按限定名读一个符号的源码 | 限定名由 `search_code` 给出 |
+| `search_code` | 找代码。`mode=symbol` 按声明名逐字匹配（默认），`mode=text` 搜源码全文，`mode=regex` 才把输入当正则 | 记得名字用 symbol，只记得片段或要搜注释用 text，确实要写模式才用 regex |
+| `read_symbol` | 按限定名读一个符号的源码 | 限定名用 `search_code` 结果里的 `canonical_qn` |
 | `trace_calls` | 沿调用图走，`direction=inbound` 看谁调用它，`outbound` 看它调用谁 | 评估改动影响面 |
 | `query_code_graph` | 对代码图跑只读 openCypher 查询 | 只在上面几个都问不出来时用，它耦合上游的图结构 |
 
-调用图**可能有漏边**：上游只对 12 种语言做类型解析，其余语言按文本匹配。没有边不等于没有调用——每个读调用图的答案都会带上这句提醒。
+三件事值得单独记住：
+
+- **`indexed: true` 表示现在就能查**，不只是上游记得建过。上游列得出来但答不上来（图建了一半、cache 被挪走、版本对不上）一律算未索引——显示成已索引，只会让人对着搜索框浪费二十分钟。
+- **符号有两个名字**：`display_qn` 给人读，`canonical_qn` 给机器用。后续 `read_symbol`、`trace_calls` 一律传 `canonical_qn`；重名时短名会带一个稳定后缀 `#xxxxxx`，那种名字传回来会被直接拒绝并告诉你该用哪个。
+- **调用链只收能唯一确证的关系**。两端认不全的关系不进结果，而是记进随结果返回的「未解析」计数。调用图本身**可能有漏边**：上游只对 12 种语言做类型解析，其余语言按文本匹配。没有边不等于没有调用——每个读调用图的答案都会带上这句提醒。
+
+搜索失败会分成四类回给你：查询本身有问题（自己改）、上游拒绝（换个问法）、上游不可用（找运维）、网关内部出错（报 bug）。每条都带一个诊断编号，和日志里那行是同一个。
 
 ## 运维日常
 
@@ -226,32 +248,32 @@ curl -s localhost:8080/api/system/status
 - 没装 `codebase-memory-mcp`：文档域一切照常，代码域的接口一律返回 `ok=false` 并说明原因，状态页显示上游不可用。装好之后 `systemctl restart knowledge-base` 即可。
 - 没构建前端：日志里会有一行 `The web UI is not built at ...; serving the API and the MCP endpoint only`，`/api` 与 `/mcp` 照常工作，只是浏览器打开是 404。
 
-## 代码链路的人工验证
+## 发布前的真实上游门禁
 
-「agent 搜到符号 → 读定义 → 追调用链」这条链路依赖 `codebase-memory-mcp` 二进制，开发机（尤其 Windows）上通常没有，对应的测试带 `upstream_binary` 标记，二进制不在就跳过。在 Ubuntu 上部署完之后按下面走一遍：
+常规 CI 不需要 `codebase-memory-mcp`：并发、故障与前端验收全部跑在假二进制上，是确定性的。但「假二进制答得对」和「真二进制答得对」是两件事，所以上线前要在**装了目标版本二进制的那台机器**上跑一遍真实门禁。
 
 ```bash
-# 1. 确认二进制在
+# 1. 确认装的是要上线的那个版本
 codebase-memory-mcp --version
 
-# 2. 放一个代码库进去并建索引
-sudo -u knowledge-base git clone <仓库> /srv/knowledge-base/codebase/demo
-curl -X POST localhost:8080/api/code/repos/demo/index      # 返回 {"repo":"demo","ok":true,...}
-
-# 3. 跑那条被跳过的测试（它会自己起服务、自己建索引）
-#    注意：CBM 的协调守护进程每账户只认一个 cache 目录，测试用的是自己的临时目录，
-#    所以同账户下正在跑的知识库服务必须先停，否则上游会直接拒绝，测试只能跳过。
+# 2. CBM 的协调守护进程每账户只认一个 cache 目录，门禁用的是自己的临时目录，
+#    所以同账户下正在跑的知识库服务必须先停，否则上游会直接拒绝、门禁只能跳过。
 sudo systemctl stop knowledge-base
-cd /opt/knowledge-base/src
-/opt/knowledge-base/venv/bin/python -m pytest tests/test_acceptance.py -m upstream_binary -v
-sudo systemctl start knowledge-base
 
-# 4. 或者用真实的 agent 走一遍：在 opencode 里连上 kb，依次问
-#    「kb 里有哪些代码库」→「demo 的架构是什么样」→「找一下 XXX 这个函数」
-#    →「读一下它的源码」→「谁调用了它」
+# 3. 一条命令跑完
+cd /opt/knowledge-base/src
+/opt/knowledge-base/venv/bin/python -m pytest -m upstream_binary -v -rs
+
+sudo systemctl start knowledge-base
 ```
 
-第 3 步应当是 `1 passed`。跳过时测试会说明原因：要么 `codebase-memory-mcp` 不在 `PATH` 上，要么同账户下还有别的 CBM 守护进程占着 cache（`codebase-memory-mcp daemon stop` 之后重试）。
+这一轮覆盖：20 个并发读取各自拿到自己的答案（回复不串台）、守护进程被中途停掉后调用仍能重连答出来、`indexed` 确实等于「现在查得动」、检索给的 `canonical_qn` 能原样读回源码、调用链是真符号之间的边、以及这台机器算出来的对外地址就是状态页交出去的那个。
+
+全绿之前不要发布。跳过时 `-rs` 会打出原因，两种：`codebase-memory-mcp` 不在 `PATH` 上，或者同账户下还有别的 CBM 守护进程占着 cache（`codebase-memory-mcp daemon stop` 之后重试）。这两种都不是代码缺陷，但**也不算通过**。
+
+门禁里有一条格外容易被忽略：关掉上游自带文件监听的那个配置键（`auto_watch`）在当前安装的版本里必须真实存在。上游对未知的键只是非零退出、打一行 `unknown config key`，抓不到任何可捕获的失败——键名不对等于监听根本没关，它会在服务背后重建索引。`tests/test_code_process.py` 里那条测试就是专门盯这件事的，跟着 `-m upstream_binary` 一起跑。
+
+想用真实 agent 再走一遍：在 opencode 里连上 kb，依次问「kb 里有哪些代码库」→「demo 的架构是什么样」→「找一下 XXX 这个函数」→「读一下它的源码」→「谁调用了它」。
 
 ## 开发
 
@@ -264,6 +286,17 @@ python3.12 -m venv .venv
 .venv/bin/ruff check src tests && .venv/bin/ruff format --check src tests
 .venv/bin/pyright
 ```
+
+浏览器验收另装一份 Playwright，并且要先有前端构建产物；缺哪一样就跳过哪一样，并在跳过原因里写清楚补哪条命令：
+
+```bash
+.venv/bin/pip install -e ".[dev,browser]"
+.venv/bin/playwright install chromium
+(cd frontend && npm ci && npm run build)
+.venv/bin/pytest tests/test_browser.py
+```
+
+CI 每次改动跑后端测试、类型、格式、前端构建和浏览器验收，全部基于假二进制。真实上游的门禁见上一节，另有一个夜间入口（`workflow_dispatch` 也能手动触发）跑完整套件。
 
 本地跑服务：在任意目录 `knowledge-base server --root .`，前端构建产物默认从源码树的 `frontend/dist` 找。
 

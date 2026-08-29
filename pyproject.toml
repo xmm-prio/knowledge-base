@@ -32,6 +32,11 @@ dev = [
     "ruff>=0.9",
     "pyright>=1.1.390",
 ]
+browser = [
+    # Reading the built web UI in a real browser. Its own browsers are a separate download
+    # (`playwright install chromium`), so the tests skip rather than fail without them.
+    "playwright>=1.49",
+]
 
 [project.scripts]
 knowledge-base = "knowledge_base.cli:app"

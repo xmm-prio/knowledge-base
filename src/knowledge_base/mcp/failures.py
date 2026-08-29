@@ -17,6 +17,8 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from knowledge_base.code.engine import UnknownRepo
+from knowledge_base.code.failures import InvalidQuery, classify
+from knowledge_base.code.upstream import UpstreamError
 from knowledge_base.docs.graph import GraphUnavailable, NoSuchDocument
 from knowledge_base.docs.store import LearningExists, NoSuchLearning
 from knowledge_base.layout import OutsideLearnings
@@ -60,6 +62,11 @@ def explain(failure: BaseException) -> str:
         for kind, explanation in _EXPLANATIONS:
             if isinstance(candidate, kind):
                 return f"{explanation}（{candidate}）"
+        if isinstance(candidate, UpstreamError | InvalidQuery):
+            # The code domain classifies its own failures, so an agent and a browser are told
+            # the same thing about the same failure and quote the same diagnostic for it.
+            trouble = classify(candidate)
+            return f"{trouble.message}（诊断 {trouble.diagnostic}）"
     if isinstance(failure, ToolError):
         return str(failure)
     logger.error("Tool call failed", exc_info=failure)

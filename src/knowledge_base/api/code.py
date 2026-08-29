@@ -30,6 +30,7 @@ from knowledge_base.code.engine import (
     SearchMode,
     UnknownRepo,
 )
+from knowledge_base.code.failures import classify
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,19 @@ class CodeReply(BaseModel):
 
     ok: bool
     payload: object = None
-    """The upstream's own JSON, verbatim. Its shape is the upstream's, not ours."""
+    """Either this service's own reading of the answer -- symbol matches, a call chain -- or,
+    where nothing was worth reading into, the upstream's own JSON verbatim."""
 
     caveat: str | None = None
     """What the caller must not read into the payload -- the call graph has holes."""
 
     error: str | None = None
+
+    kind: str | None = None
+    """Which of the four failures this was, so the page can say who has to act on it."""
+
+    diagnostic: str | None = None
+    """The identifier this failure was logged under. Quotable to an operator."""
 
 
 class RepoReply(BaseModel):
@@ -94,8 +102,13 @@ async def ask(answer: Callable[[], CodeAnswer]) -> CodeReply:
         # upstream, and the caller has to be able to tell those apart.
         raise
     except Exception as failure:  # noqa: BLE001 - the upstream's failures are data here
-        logger.warning("the code upstream could not answer: %s", failure)
-        return CodeReply(ok=False, error=str(failure))
+        trouble = classify(failure)
+        return CodeReply(
+            ok=False,
+            error=trouble.message,
+            kind=trouble.kind,
+            diagnostic=trouble.diagnostic,
+        )
     return CodeReply(ok=True, payload=given.payload, caveat=given.caveat)
 
 
@@ -126,7 +139,9 @@ async def index_repo(name: str, bound: Bound) -> IndexReply:
 @router.get("/search", summary="按符号名或全文搜索代码")
 async def search(
     bound: Bound,
-    q: Annotated[str, Query(min_length=1, description="符号名的正则，或全文关键词")],
+    q: Annotated[
+        str, Query(min_length=1, description="符号名或关键词，按字面处理；正则请用 mode=regex")
+    ],
     mode: SearchMode = SearchMode.SYMBOL,
     repo: str | None = None,
 ) -> CodeReply:
@@ -136,7 +151,7 @@ async def search(
 @router.get("/symbol", summary="读一个符号的源码")
 async def read_symbol(
     bound: Bound,
-    name: Annotated[str, Query(min_length=1, description="限定名，由符号搜索得到")],
+    name: Annotated[str, Query(min_length=1, description="canonical_qn，由符号搜索得到")],
     repo: str | None = None,
 ) -> CodeReply:
     return await ask(lambda: bound.code.read_symbol(name, repo=repo))

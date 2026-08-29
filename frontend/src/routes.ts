@@ -14,6 +14,7 @@ export const routes = {
   documents: (path?: string) => (path ? `/documents/${encodeSegments(path)}` : "/documents"),
   tags: (tag?: string) => (tag ? `/tags?tag=${encodeURIComponent(tag)}` : "/tags"),
   history: (path?: string) => (path ? `/history?path=${encodeURIComponent(path)}` : "/history"),
-  code: () => "/code",
+  /** With a canonical qualified name, the code page opens straight onto that symbol. */
+  code: (symbol?: string) => (symbol ? `/code?symbol=${encodeURIComponent(symbol)}` : "/code"),
   system: () => "/system",
 };

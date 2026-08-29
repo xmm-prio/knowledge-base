@@ -46,11 +46,14 @@ LIST_DESCRIPTION = "列出已纳管的代码库，以及各自是否已建好索
 ARCHITECTURE_DESCRIPTION = "某个代码库的整体结构：语言、包、入口、热点。陌生仓库先看这个。"
 
 SEARCH_DESCRIPTION = (
-    "在代码库里找代码。mode=symbol 按声明名匹配正则（默认），"
-    "mode=text 在源码里搜文本，注释与未解析语言也能搜到。"
+    "在代码库里找代码。mode=symbol 按声明名逐字匹配（默认），"
+    "mode=text 搜源码全文，注释与未解析语言也搜得到，mode=regex 才把 query 当正则。"
 )
 
-READ_DESCRIPTION = "按限定名读一个符号的源码，限定名由 search_code 给出。"
+READ_DESCRIPTION = (
+    "按限定名读一个符号的源码。限定名要用 search_code 结果里的 canonical_qn，"
+    "不是给人看的 display_qn。"
+)
 
 TRACE_DESCRIPTION = "沿调用图走：direction=inbound 看谁调用它，outbound 看它调用谁。"
 
@@ -86,8 +89,10 @@ def install(server: FastMCP, code: CodeEngine, heartbeat: timedelta) -> None:
     @server.tool(description=SEARCH_DESCRIPTION, annotations={"readOnlyHint": True})
     async def search_code(
         context: Context,
-        query: Annotated[str, Field(description="符号名正则，或要搜的文本")],
-        mode: Annotated[SearchMode, Field(description="按符号还是按文本")] = SearchMode.SYMBOL,
+        query: Annotated[str, Field(description="要找的符号名或文本，按字面处理")],
+        mode: Annotated[SearchMode, Field(description="按符号、按文本还是按正则")] = (
+            SearchMode.SYMBOL
+        ),
         repo: Annotated[str | None, Field(description="限定一个代码库，不传则全库")] = None,
     ) -> CodeResult:
         """Find code by declared name, or by text."""
@@ -96,7 +101,9 @@ def install(server: FastMCP, code: CodeEngine, heartbeat: timedelta) -> None:
     @server.tool(description=READ_DESCRIPTION, annotations={"readOnlyHint": True})
     async def read_symbol(
         context: Context,
-        qualified_name: Annotated[str, Field(description="符号限定名，如 src.copy.DataCopyPad")],
+        qualified_name: Annotated[
+            str, Field(description="search_code 给出的 canonical_qn，如 src.copy.DataCopyPad")
+        ],
         repo: Annotated[str | None, Field(description="限定一个代码库")] = None,
     ) -> CodeResult:
         """Read the source of one symbol."""

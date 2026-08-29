@@ -5,8 +5,9 @@ is actually indexed, and what do I paste into a colleague's opencode.json.
 """
 
 import json
+from pathlib import Path
 
-from api_harness import ApiHarness
+from api_harness import ApiHarness, Unreachable, running_api
 
 
 class TestStatus:
@@ -46,7 +47,7 @@ class TestStatus:
 
         assert body["code"]["ok"] is False
 
-    async def test_the_opencode_snippet_points_at_the_host_the_browser_used(
+    async def test_the_opencode_snippet_points_at_the_address_the_service_hands_out(
         self, api: ApiHarness
     ) -> None:
         """It is copied straight into a colleague's config, so it has to be right as it is."""
@@ -54,18 +55,37 @@ class TestStatus:
 
         configuration = json.loads(body["mcp"]["opencode_config"])
 
-        assert body["mcp"]["url"] == "http://kb.internal/mcp"
+        assert body["mcp"]["url"] == "http://kb.internal:8080/mcp"
         assert configuration == {
             "$schema": "https://opencode.ai/config.json",
             "mcp": {
                 "kb": {
                     "type": "remote",
-                    "url": "http://kb.internal/mcp",
+                    "url": "http://kb.internal:8080/mcp",
                     "enabled": True,
                     "oauth": False,
                 }
             },
         }
+
+    async def test_the_snippet_does_not_change_with_the_host_the_browser_used(
+        self, api: ApiHarness
+    ) -> None:
+        """A member on a VPN reaches the page by one name and their colleague by another. The
+        snippet they copy travels, so it names the service rather than their route to it."""
+        body = (
+            await api.client.get("/api/system/status", headers={"Host": "somebody-elses-name"})
+        ).json()
+
+        assert body["mcp"]["url"] == "http://kb.internal:8080/mcp"
+
+    async def test_no_address_to_hand_out_is_said_rather_than_guessed(self, tmp_path: Path) -> None:
+        """A plausible address nobody can connect to costs an afternoon of confusion."""
+        async with running_api(tmp_path, address=Unreachable()) as api:
+            body = (await api.client.get("/api/system/status")).json()
+
+        assert body["mcp"]["url"] == ""
+        assert "没有默认路由" in body["mcp"]["error"]
 
 
 class TestReindexing:

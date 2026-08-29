@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 
 from conftest import FakeClock, ManualSleep
+from knowledge_base.address import Address, FixedAddress, NoRouteOutward, Reachable
 from knowledge_base.api import create_app
 from knowledge_base.code.engine import CodeEngine
 from knowledge_base.docs.service import DocumentService
@@ -25,6 +26,11 @@ QUIET = timedelta(seconds=30)
 BETWEEN_COMMITS = timedelta(seconds=5)
 PATIENCE = 15.0
 
+ADVERTISED_HOST = "kb.internal"
+ADVERTISED_PORT = 8080
+"""What the service says it is reachable on. Stated rather than resolved, because the address
+of whatever machine runs the tests is not a thing to assert against."""
+
 
 class FakeUpstream:
     """The supervised binary, answering with canned payloads."""
@@ -32,16 +38,31 @@ class FakeUpstream:
     def __init__(self, answers: dict[str, object] | None = None) -> None:
         self.answers = answers or {}
         self.failing: set[str] = set()
+        self.raising: dict[str, Exception] = {}
+        """Failures of a stated kind, for tests about how a failure is classified."""
+
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     def call_tool(self, tool: str, arguments: dict[str, object]) -> object:
         self.calls.append((tool, arguments))
+        if (stated := self.raising.get(tool)) is not None:
+            raise stated
         if tool in self.failing:
             raise RuntimeError(f"{tool} refused")
         return self.answers.get(tool, {})
 
     def arguments_for(self, tool: str) -> list[dict[str, object]]:
         return [arguments for name, arguments in self.calls if name == tool]
+
+
+class Unreachable:
+    """A machine with no address worth handing out: no default route, or IPv6 only."""
+
+    def advertised(self) -> Reachable:
+        raise NoRouteOutward(
+            "找不到可对外提供服务的 IPv4 地址：这台机器没有默认路由，"
+            "或者只有 IPv6。请用 --host 显式指定组员能连上的地址。"
+        )
 
 
 class FakeSupervisor:
@@ -100,7 +121,7 @@ class ApiHarness:
 
 
 @asynccontextmanager
-async def running_api(root_path: Path) -> AsyncIterator[ApiHarness]:
+async def running_api(root_path: Path, address: Address | None = None) -> AsyncIterator[ApiHarness]:
     """The whole thing, started and torn down again."""
     root = KnowledgeBaseRoot(root_path)
     root.initialize()
@@ -114,7 +135,12 @@ async def running_api(root_path: Path) -> AsyncIterator[ApiHarness]:
     )
     upstream = FakeUpstream()
     supervisor = FakeSupervisor()
-    application = create_app(documents, CodeEngine(root, upstream), supervisor=supervisor)
+    application = create_app(
+        documents,
+        CodeEngine(root, upstream),
+        supervisor=supervisor,
+        address=address if address is not None else FixedAddress(ADVERTISED_HOST, ADVERTISED_PORT),
+    )
 
     await documents.start()
     transport = httpx.ASGITransport(app=application)

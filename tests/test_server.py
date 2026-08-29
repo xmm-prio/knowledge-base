@@ -67,7 +67,7 @@ class TestTheRestApi:
         async with assembled(tmp_path) as running:
             reply = await running.client.get("/api/system/status")
 
-        assert reply.json()["mcp"]["url"] == "http://kb.internal/mcp"
+        assert reply.json()["mcp"]["url"] == "http://kb.internal:8080/mcp"
 
 
 class TestWithoutTheUpstreamBinary:

@@ -1,12 +1,14 @@
 """Tests for the code domain over HTTP.
 
-The upstream is a C binary whose payload shapes are undocumented, so every test here asserts
-that the payload arrives untouched rather than asserting anything about what is in it. The
-other half is failure: the binary can be missing or mid-restart, and the code page has to
-degrade rather than break.
+The upstream is a C binary whose payload shapes are undocumented, so a payload this service
+cannot read into arrives untouched rather than reshaped on a guess. Where it can -- symbol
+matches, call chains -- the answer is this service's own, and the tests say so. The other
+half is failure: the binary can be missing or mid-restart, and the code page has to degrade
+rather than break, while still telling a member whose typo it was.
 """
 
 from api_harness import ApiHarness
+from knowledge_base.code.upstream import UpstreamUnavailable
 
 ARCHITECTURE = {"languages": ["c"], "hotspots": [{"name": "main"}]}
 
@@ -76,16 +78,16 @@ class TestAsking:
     ) -> None:
         api.place_repo("mops")
 
-        await api.client.get("/api/code/search", params={"q": "DataCopy.*", "repo": "mops"})
+        await api.client.get("/api/code/search", params={"q": "DataCopyPad", "repo": "mops"})
         await api.client.get(
-            "/api/code/search", params={"q": "DataCopy.*", "mode": "text", "repo": "mops"}
+            "/api/code/search", params={"q": "DataCopyPad", "mode": "text", "repo": "mops"}
         )
 
         assert api.upstream.arguments_for("search_graph") == [
-            {"name_pattern": "DataCopy.*", "project": "mops"}
+            {"name_pattern": "DataCopyPad", "project": "mops"}
         ]
         assert api.upstream.arguments_for("search_code") == [
-            {"query": "DataCopy.*", "project": "mops"}
+            {"query": "DataCopyPad", "project": "mops"}
         ]
 
     async def test_tracing_takes_a_direction_and_a_depth(self, api: ApiHarness) -> None:
@@ -134,3 +136,65 @@ class TestWhenTheUpstreamCannotAnswer:
         response = await api.client.get("/api/code/repos/nope/architecture")
 
         assert response.status_code == 404
+
+    async def test_a_missing_binary_and_a_mistyped_pattern_are_told_apart(
+        self, api: ApiHarness
+    ) -> None:
+        """Shown as one thing, they send the member to an operator over their own typo."""
+        api.place_repo("mops")
+        api.upstream.raising["search_graph"] = UpstreamUnavailable("the binary is gone")
+
+        gone = (await api.client.get("/api/code/search", params={"q": "Run"})).json()
+        typo = (
+            await api.client.get("/api/code/search", params={"q": "Run(", "mode": "regex"})
+        ).json()
+
+        assert gone["kind"] == "unavailable"
+        assert typo["kind"] == "bad_request"
+
+    async def test_a_failure_can_be_quoted_to_whoever_keeps_the_logs(self, api: ApiHarness) -> None:
+        api.place_repo("mops")
+        api.upstream.raising["search_graph"] = UpstreamUnavailable("the binary is gone")
+
+        body = (await api.client.get("/api/code/search", params={"q": "Run"})).json()
+
+        assert body["diagnostic"]
+
+    async def test_a_bad_pattern_never_reaches_the_upstream(self, api: ApiHarness) -> None:
+        await api.client.get("/api/code/search", params={"q": "Run(", "mode": "regex"})
+
+        assert api.upstream.calls == []
+
+
+class TestWhatTheAnswerLooksLike:
+    async def test_a_symbol_search_arrives_named_twice(self, api: ApiHarness) -> None:
+        """One name to read on screen, one to hand back when the row is clicked."""
+        api.place_repo("mops")
+        api.upstream.answers["search_graph"] = {
+            "results": [{"qualified_name": "_srv_kb_mops_src.copy.Run", "project": "mops"}]
+        }
+
+        body = (await api.client.get("/api/code/search", params={"q": "Run"})).json()
+
+        (one,) = body["payload"]["matches"]
+        assert one["canonical_qn"] == "_srv_kb_mops_src.copy.Run"
+        assert one["display_qn"] == "mops.copy.Run"
+
+    async def test_a_traced_chain_arrives_as_nodes_and_edges(self, api: ApiHarness) -> None:
+        """A generic JSON tree cannot say who calls whom, which is the whole question."""
+        api.upstream.answers["trace_path"] = {"paths": [[{"qn": "a.Top"}, {"qn": "b.Leaf"}]]}
+
+        body = (await api.client.get("/api/code/calls", params={"symbol": "b.Leaf"})).json()
+
+        assert body["payload"]["edges"] == [{"caller": "a.Top", "callee": "b.Leaf"}]
+
+    async def test_what_could_not_be_resolved_is_counted_beside_the_answer(
+        self, api: ApiHarness
+    ) -> None:
+        api.upstream.answers["trace_path"] = {
+            "edges": [{"caller": "a.Top", "callee": "b.Leaf"}, {"caller": "a.Top"}]
+        }
+
+        body = (await api.client.get("/api/code/calls", params={"symbol": "b.Leaf"})).json()
+
+        assert body["payload"]["unresolved"] == 1

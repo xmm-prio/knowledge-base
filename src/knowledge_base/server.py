@@ -31,6 +31,7 @@ from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from knowledge_base.address import Address, RoutedAddress
 from knowledge_base.api import create_app
 from knowledge_base.code.engine import CodeEngine
 from knowledge_base.code.process import CbmBinary
@@ -160,11 +161,13 @@ class Service:
         binary: Binary | None = None,
         frontend: Path | None = None,
         heartbeat: timedelta = HEARTBEAT,
+        address: Address | None = None,
     ) -> None:
         self.root = root
         self.upstream = SupervisedUpstream(Supervisor(binary or CbmBinary(root)))
         self.documents = DocumentService(root)
         self.code = CodeEngine(root, self.upstream)
+        self.address = address if address is not None else RoutedAddress()
         self._mcp = create_mcp_app(
             root, self.documents, self.code, heartbeat=heartbeat, path=MCP_PATH
         )
@@ -189,7 +192,7 @@ class Service:
 
     def _compose(self, frontend: Path) -> Starlette:
         """One application out of three, with the MCP lifespan run by the host's."""
-        api = create_app(self.documents, self.code, supervisor=self.upstream)
+        api = create_app(self.documents, self.code, supervisor=self.upstream, address=self.address)
         if frontend.is_dir():
             api.mount("/", SinglePageApp(frontend), name="frontend")
         else:
@@ -261,9 +264,12 @@ async def code_domain(
 
     The mirror of the above: indexing a repository does not need the document graph, whose
     upstream costs several seconds of migrations and model loading to bring up.
+
+    One conversation, not the pool the served process keeps: a command has one caller, and a
+    second upstream process would be a second few seconds of startup for nobody.
     """
     root.initialize()
-    upstream = SupervisedUpstream(Supervisor(binary or CbmBinary(root)))
+    upstream = SupervisedUpstream(Supervisor(binary or CbmBinary(root), conversations=1))
     upstream.start()
     try:
         yield CodeSide(CodeEngine(root, upstream), upstream)

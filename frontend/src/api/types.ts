@@ -77,12 +77,62 @@ export interface Hit {
   score: number;
 }
 
-/** The code domain's envelope. `payload` is the upstream binary's JSON, shape unconfirmed. */
+/**
+ * Which of the four failures a code answer hit. The distinction decides who is being asked to
+ * do something: fix the search box, ask a different question, or go and find an operator.
+ */
+export type FailureKind = "bad_request" | "refused" | "unavailable" | "internal";
+
+/** One symbol, under the name to read and the name to ask with. Never confuse the two. */
+export interface CodeSymbol {
+  canonical_qn: string;
+  display_qn: string;
+  repo: string | null;
+  file: string | null;
+  line: number | null;
+  kind: string | null;
+}
+
+export interface SymbolMatches {
+  matches: CodeSymbol[];
+  /** Entries the upstream returned that carry no name this service could identify. */
+  unreadable: number;
+  /** The upstream's own payload, present only when nothing at all could be read from it. */
+  raw: unknown;
+}
+
+export interface CallNode {
+  symbol: CodeSymbol;
+  depth: number;
+}
+
+export interface CallEdge {
+  caller: string;
+  callee: string;
+}
+
+export interface CallChain {
+  root: string;
+  direction: string;
+  nodes: CallNode[];
+  edges: CallEdge[];
+  /** Relations that could not be pinned to one symbol at each end, dropped and counted. */
+  unresolved: number;
+  raw: unknown;
+}
+
+/**
+ * The code domain's envelope. `payload` is this service's own reading of the answer where it
+ * had one -- `SymbolMatches`, `CallChain` -- and the upstream's JSON verbatim where it did not.
+ */
 export interface CodeReply {
   ok: boolean;
   payload: unknown;
   caveat: string | null;
   error: string | null;
+  kind: FailureKind | null;
+  /** The identifier this failure was logged under. Quotable to an operator. */
+  diagnostic: string | null;
 }
 
 export interface SearchReply {
@@ -158,8 +208,10 @@ export interface CodeStatus {
 }
 
 export interface McpStatus {
+  /** Empty when the service has no address worth handing out; `error` says why. */
   url: string;
   opencode_config: string;
+  error: string | null;
 }
 
 export interface StatusReply {
@@ -168,5 +220,5 @@ export interface StatusReply {
   mcp: McpStatus;
 }
 
-export type SearchMode = "symbol" | "text";
+export type SearchMode = "symbol" | "text" | "regex";
 export type CallDirection = "inbound" | "outbound" | "both";

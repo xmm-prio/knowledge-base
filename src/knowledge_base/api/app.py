@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from knowledge_base.address import Address, RoutedAddress
 from knowledge_base.api import code as code_routes
 from knowledge_base.api import documents as document_routes
 from knowledge_base.api import history as history_routes
@@ -55,6 +56,7 @@ def create_app(
     documents: DocumentService,
     code: CodeEngine,
     supervisor: UpstreamHealth | None = None,
+    address: Address | None = None,
 ) -> FastAPI:
     """Build the REST API over domains someone else started."""
     application = FastAPI(
@@ -62,7 +64,12 @@ def create_app(
         description="内部知识库的 REST API，供网页端使用。",
         version="0.1.0",
     )
-    application.state.domains = Domains(documents=documents, code=code, supervisor=supervisor)
+    application.state.domains = Domains(
+        documents=documents,
+        code=code,
+        supervisor=supervisor,
+        address=address if address is not None else RoutedAddress(),
+    )
 
     for router in (
         search_routes.router,

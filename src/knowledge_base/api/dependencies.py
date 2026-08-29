@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Protocol
 
 from fastapi import Depends, Request
 
+from knowledge_base.address import Address, RoutedAddress
 from knowledge_base.code.engine import CodeEngine
 from knowledge_base.docs.service import DocumentService
 
@@ -27,6 +28,10 @@ class Domains:
     supervisor: UpstreamHealth | None = None
     """Absent when nothing supervises the upstream, in which case its health is reported as
     unknown rather than guessed at."""
+
+    address: Address = field(default_factory=RoutedAddress)
+    """Where to tell a colleague this service is. Not read off the request: the snippet the
+    status page hands out is copied into files that travel."""
 
 
 def domains(request: Request) -> Domains:

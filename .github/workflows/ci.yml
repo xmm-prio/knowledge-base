@@ -1,0 +1,117 @@
+name: CI
+
+# The upstream binary is built per platform and is not on a runner, so nothing here needs it:
+# the code domain's tests drive a fake process and the rest of the service does not care.
+# Verifying against the real codebase-memory-mcp is a release-time step on a machine that has
+# it installed, described in the README.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The nightly entry point. Everything above runs per change and has to stay fast; this one
+  # runs the whole thing end to end, including the release gate, which on a runner reports how
+  # much of the gate is reachable without the binary rather than pretending it passed.
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: 后端：测试、类型与格式
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装依赖
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev]"
+      - name: 格式
+        run: .venv/bin/ruff format --check src tests
+      - name: Lint
+        run: .venv/bin/ruff check src tests
+      - name: 类型
+        run: .venv/bin/pyright
+      - name: 测试
+        run: .venv/bin/pytest -q
+
+  frontend:
+    name: 前端：类型与构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci
+      - name: 类型
+        working-directory: frontend
+        run: npm run typecheck
+      - name: 构建
+        working-directory: frontend
+        run: npm run build
+
+  browser:
+    name: 网页：浏览器验收
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 构建网页 UI
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: 安装依赖
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev,browser]"
+          .venv/bin/playwright install --with-deps chromium
+      - name: 验收
+        run: .venv/bin/pytest tests/test_browser.py -q
+
+  nightly:
+    name: 夜间：完整套件与发布门禁
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 构建网页 UI
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: 安装依赖
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev,browser]"
+          .venv/bin/playwright install --with-deps chromium
+      - name: 完整套件
+        run: .venv/bin/pytest -q
+      - name: 发布门禁（无二进制时按项跳过并说明原因）
+        run: .venv/bin/pytest -m upstream_binary -q -rs

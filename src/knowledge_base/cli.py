@@ -22,6 +22,7 @@ import typer
 import uvicorn
 
 from knowledge_base import __version__
+from knowledge_base.address import DEFAULT_PORT, Address, NoRouteOutward, advertised_for
 from knowledge_base.api.system import opencode_config
 from knowledge_base.layout import KnowledgeBaseRoot
 from knowledge_base.server import MCP_PATH, Service, code_domain, document_domain
@@ -29,7 +30,6 @@ from knowledge_base.server import MCP_PATH, Service, code_domain, document_domai
 logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8080
 
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 
@@ -62,6 +62,14 @@ def _root(path: Path) -> KnowledgeBaseRoot:
     return KnowledgeBaseRoot(path.resolve())
 
 
+def _announced(address: Address) -> str:
+    """The MCP endpoint as the startup log should state it, or why it cannot be stated."""
+    try:
+        return address.advertised().url(MCP_PATH)
+    except NoRouteOutward as unknown:
+        return str(unknown)
+
+
 def _offline[T](work: Callable[[], Awaitable[T]]) -> T:
     """Run one piece of asynchronous work to completion, and get the process back.
 
@@ -90,12 +98,16 @@ def server(
     verbose: Verbose = False,
 ) -> None:
     _configure_logging(verbose)
-    service = Service(_root(root), frontend=frontend)
-    reachable = "localhost" if host in ("0.0.0.0", "::") else host
+    address = advertised_for(host, port)
+    service = Service(_root(root), frontend=frontend, address=address)
     logger.info("knowledge-base %s", __version__)
     logger.info("Knowledge base root: %s", service.root.path)
     logger.info("Listening on http://%s:%d", host, port)
-    logger.info("MCP endpoint: http://%s:%d%s", reachable, port, MCP_PATH)
+    logger.info("MCP endpoint: %s", _announced(address))
+    logger.info(
+        "There is no authentication in front of this: it is meant for a network where "
+        "everyone who can reach it is allowed to read and write."
+    )
     uvicorn.run(service.application, host=host, port=port, log_config=None)
 
 
@@ -149,11 +161,14 @@ def status(root: Root = Path(), host: Host = DEFAULT_HOST, port: Port = DEFAULT_
         )
 
     documents, observations, upstream, repos, indexed = _offline(look)
-    reachable = "localhost" if host in ("0.0.0.0", "::") else host
-    url = f"http://{reachable}:{port}{MCP_PATH}"
     typer.echo(f"根目录：{_root(root).path}")
     typer.echo(f"文档：{documents} 篇，观察 {observations} 条")
     typer.echo(f"代码域上游：{'已连接' if upstream else '不可用'}")
     typer.echo(f"代码库：{repos} 个，其中 {indexed} 个已索引")
+    try:
+        url = advertised_for(host, port).advertised().url(MCP_PATH)
+    except NoRouteOutward as unknown:
+        typer.echo(f"MCP 地址：{unknown}")
+        return
     typer.echo("组员的 opencode 配置片段：")
     typer.echo(opencode_config(url))

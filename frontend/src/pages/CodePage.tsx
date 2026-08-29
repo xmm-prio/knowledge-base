@@ -7,10 +7,13 @@
  */
 
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { CallDirection, CodeReply, SearchMode } from "../api/types";
 import { Page } from "../app/Shell";
+import { CallChainView } from "../components/CallChainView";
 import { CodeAnswer } from "../components/CodeAnswer";
+import { SymbolMatchesView } from "../components/SymbolMatchesView";
 import { useAction, useAsync } from "../hooks/useAsync";
 import {
   Badge,
@@ -37,15 +40,47 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "cypher", label: "Cypher" },
 ];
 
+/**
+ * Moving between the tabs by clicking a result rather than retyping a name.
+ *
+ * Every hand-off carries `canonical_qn`: the short name on screen is for reading, and handing
+ * it back would break the very call the click was meant to make.
+ */
+interface Follow {
+  read: (canonical: string) => void;
+  trace: (canonical: string) => void;
+}
+
 export function CodePage() {
-  const [tab, setTab] = useState<Tab>("architecture");
+  // Arriving from the unified search with a symbol in hand means the question was already
+  // asked; opening on the architecture tab would make it be asked again.
+  const [params] = useSearchParams();
+  const arrived = params.get("symbol") ?? "";
+
+  const [tab, setTab] = useState<Tab>(arrived ? "symbol" : "architecture");
   const [repo, setRepo] = useState<string | null>(null);
+  const [symbol, setSymbol] = useState(arrived);
+  const [traced, setTraced] = useState("");
 
   const repos = useAsync(() => api.repos(), []);
   const reindex = useAction((name: string) => api.indexRepo(name));
 
+  const follow: Follow = {
+    read: (canonical) => {
+      setSymbol(canonical);
+      setTab("symbol");
+    },
+    trace: (canonical) => {
+      setTraced(canonical);
+      setTab("calls");
+    },
+  };
+
   return (
-    <Page title="代码库" lead="上游返回的结构未经确证，页面按形状而非字段名渲染，并始终留一份原始 JSON。">
+    <Page
+      title="代码库"
+      lead="“已索引”表示现在就能查得动，不只是上游记得建过。符号与调用链按本服务自己的模型呈现，其余结构未经确证，按形状渲染并始终留一份原始 JSON。"
+    >
       <div className={css.layout}>
         <Card tight>
           <Panel
@@ -133,11 +168,11 @@ export function CodePage() {
             {tab === "architecture" ? (
               <Architecture repo={repo} />
             ) : tab === "search" ? (
-              <CodeSearch repo={repo} />
+              <CodeSearch repo={repo} follow={follow} />
             ) : tab === "symbol" ? (
-              <SymbolLookup repo={repo} />
+              <SymbolLookup repo={repo} name={symbol} onName={setSymbol} />
             ) : tab === "calls" ? (
-              <CallTrace repo={repo} />
+              <CallTrace repo={repo} symbol={traced} onSymbol={setTraced} follow={follow} />
             ) : (
               <CypherConsole repo={repo} />
             )}
@@ -156,7 +191,14 @@ function Architecture({ repo }: { repo: string | null }) {
   return <CodeAnswer answer={answer.data} loading={answer.loading} error={answer.error} />;
 }
 
-function CodeSearch({ repo }: { repo: string | null }) {
+/** What each mode is looking for, said where the person typing can read it. */
+const SEARCH_LABELS: Record<SearchMode, string> = {
+  symbol: "符号名（按字面匹配，括号点号都不用转义）",
+  text: "源码关键词",
+  regex: "符号名正则（写坏了会直接告诉你坏在哪）",
+};
+
+function CodeSearch({ repo, follow }: { repo: string | null; follow: Follow }) {
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<SearchMode>("symbol");
   const query = useAction((q: string, m: SearchMode) => api.searchCode(q, m, repo));
@@ -171,7 +213,7 @@ function CodeSearch({ repo }: { repo: string | null }) {
         }}
       >
         <div className={css.grow}>
-          <Field label={mode === "symbol" ? "符号名（正则）" : "源码关键词"}>
+          <Field label={SEARCH_LABELS[mode]}>
             <Input value={draft} onChange={(event) => setDraft(event.target.value)} />
           </Field>
         </div>
@@ -181,6 +223,7 @@ function CodeSearch({ repo }: { repo: string | null }) {
             options={[
               { value: "symbol", label: "符号" },
               { value: "text", label: "全文" },
+              { value: "regex", label: "正则" },
             ]}
             onChange={setMode}
           />
@@ -189,13 +232,26 @@ function CodeSearch({ repo }: { repo: string | null }) {
           搜索
         </Button>
       </form>
-      <CodeAnswer answer={query.result} loading={query.running} error={query.error} idle="输入检索词" />
+      <CodeAnswer answer={query.result} loading={query.running} error={query.error} idle="输入检索词">
+        {mode === "text"
+          ? undefined
+          : (payload) => (
+              <SymbolMatchesView payload={payload} onRead={follow.read} onTrace={follow.trace} />
+            )}
+      </CodeAnswer>
     </>
   );
 }
 
-function SymbolLookup({ repo }: { repo: string | null }) {
-  const [name, setName] = useState("");
+function SymbolLookup({
+  repo,
+  name,
+  onName,
+}: {
+  repo: string | null;
+  name: string;
+  onName: (one: string) => void;
+}) {
   const query = useAction((one: string) => api.symbol(one, repo));
 
   return (
@@ -208,11 +264,11 @@ function SymbolLookup({ repo }: { repo: string | null }) {
         }}
       >
         <div className={css.grow}>
-          <Field label="限定名（由符号搜索得到）">
+          <Field label="canonical_qn（由符号搜索得到，不是页面上显示的短名）">
             <Input
               value={name}
               placeholder="knowledge_base.docs.notes.parse_learning"
-              onChange={(event) => setName(event.target.value)}
+              onChange={(event) => onName(event.target.value)}
             />
           </Field>
         </div>
@@ -225,8 +281,17 @@ function SymbolLookup({ repo }: { repo: string | null }) {
   );
 }
 
-function CallTrace({ repo }: { repo: string | null }) {
-  const [symbol, setSymbol] = useState("");
+function CallTrace({
+  repo,
+  symbol,
+  onSymbol,
+  follow,
+}: {
+  repo: string | null;
+  symbol: string;
+  onSymbol: (one: string) => void;
+  follow: Follow;
+}) {
   const [direction, setDirection] = useState<CallDirection>("inbound");
   const [depth, setDepth] = useState(3);
   const query = useAction((one: string, way: CallDirection, deep: number) =>
@@ -243,8 +308,8 @@ function CallTrace({ repo }: { repo: string | null }) {
         }}
       >
         <div className={css.grow}>
-          <Field label="起点符号">
-            <Input value={symbol} onChange={(event) => setSymbol(event.target.value)} />
+          <Field label="起点符号的 canonical_qn">
+            <Input value={symbol} onChange={(event) => onSymbol(event.target.value)} />
           </Field>
         </div>
         <Field label="方向">
@@ -271,7 +336,16 @@ function CallTrace({ repo }: { repo: string | null }) {
           追踪
         </Button>
       </form>
-      <CodeAnswer answer={query.result} loading={query.running} error={query.error} idle="输入起点符号" />
+      <CodeAnswer
+        answer={query.result}
+        loading={query.running}
+        error={query.error}
+        idle="输入起点符号"
+      >
+        {(payload) => (
+          <CallChainView payload={payload} onRead={follow.read} onTrace={follow.trace} />
+        )}
+      </CodeAnswer>
     </>
   );
 }
