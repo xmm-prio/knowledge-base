@@ -89,7 +89,8 @@ async def test_the_survey_reads_the_library_rather_than_being_told_about_it(
         "---\ntags: [ascendc]\n---\n\n# 概览\n", encoding="utf-8"
     )
     (root.codebase_dir / "mops").mkdir()
-    upstream = StubUpstream({"list_projects": {"projects": [{"name": "mops"}]}})
+    upstream = StubUpstream()
+    upstream.indexes(root.codebase_dir / "mops")
     documents = DocumentService(root, sleep=ManualSleep())
     await documents.start()
     try:

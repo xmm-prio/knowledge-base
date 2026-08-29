@@ -1,45 +1,33 @@
 """Reading the upstream's answers into shapes this service is willing to stand behind.
 
-The upstream's payloads are undocumented (ADR-0001), which has so far meant handing them to
-the screen untouched and letting a generic JSON tree render whatever arrived. That is honest
-about the shape and useless about the meaning: a member reading a call chain cannot tell who
-calls whom, and a member reading a search result has to copy a qualified name out of a tree
-by hand.
+The upstream answers in tables (see `tables`), and what it puts in them is not always what a
+question was about. Two readings here are deliberate and worth stating, because both make the
+answer smaller than the raw payload:
 
-So the readers below are tolerant on the way in and strict on the way out. They look for the
-handful of spellings an entry might use, and anything they cannot read is not guessed at: a
-symbol without a qualified name is not a symbol, and an edge whose endpoints cannot both be
-pinned to one symbol is not an edge. What could not be read is counted and reported next to
-the result, because a member who is told the answer is incomplete behaves very differently
-from one who is shown a confident empty list.
+- a symbol without a qualified name is not a symbol. It is dropped and counted, never guessed
+  at, because a member who is told an answer is incomplete behaves very differently from one
+  shown a confident empty list.
+- a call is only claimed where the upstream says how it resolved it. Asked for evidence, it
+  labels every hop `lsp`, `language_rule`, `heuristic` or `unresolved` and scores it; the
+  unresolved ones are counted rather than drawn. It also reports each hop's *distance* from
+  the symbol asked about and not its caller, so beyond the first hop there is no edge to
+  draw at all -- knowing something is two hops away does not say through what.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from knowledge_base.code.naming import readable_names, repo_key
+from knowledge_base.code.naming import readable_names
+from knowledge_base.code.tables import Row, counted, rows_of
 
-QUALIFIED_NAME_KEYS = ("qualified_name", "qualifiedName", "qn", "symbol", "name")
-"""Where an entry might keep the name that identifies it, best first."""
+UNRESOLVED = "unresolved"
+"""How the upstream labels a hop it could not pin to one symbol."""
 
-REPO_KEYS = ("project", "repo", "repository")
-
-FILE_KEYS = ("file", "path", "file_path", "filePath")
-
-LINE_KEYS = ("line", "line_number", "lineNumber", "start_line")
-
-KIND_KEYS = ("kind", "type", "symbol_type", "node_type")
-
-COLLECTION_KEYS = ("results", "matches", "symbols", "nodes", "items", "entries", "data")
-"""What a payload might call the list inside it, when it is not simply a list."""
-
-CALLER_KEYS = ("caller", "from", "source", "start")
-CALLEE_KEYS = ("callee", "to", "target", "end")
-PATH_KEYS = ("paths", "chains", "routes")
-EDGE_KEYS = ("edges", "calls", "relations", "links")
+FIRST_HOP = 1
+"""The only distance at which the upstream's answer states who is on the other end."""
 
 
 @dataclass(frozen=True)
@@ -67,16 +55,26 @@ class SymbolMatches:
     unreadable: int = 0
     """Entries the upstream returned that carry no name this service could identify."""
 
+    total: int | None = None
+    """How many the upstream says exist, which is more than were returned when truncated."""
+
+    truncated: bool = False
+    """Whether a page limit stopped this short of everything that matched."""
+
     raw: Any = None
     """The upstream's own payload, kept whenever nothing at all could be read from it."""
 
 
 @dataclass(frozen=True)
 class CallNode:
-    """One symbol on a call chain, and how far from the starting point it sits."""
+    """One symbol on a call chain, how far from the starting point, and how sure we are."""
 
     symbol: Symbol
     depth: int
+    strategy: str | None = None
+    """How the upstream resolved this hop: `lsp`, `language_rule` or `heuristic`."""
+
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -95,167 +93,226 @@ class CallChain:
     direction: str
     nodes: list[CallNode] = field(default_factory=list)
     edges: list[CallEdge] = field(default_factory=list)
+    """Only the first hop. The upstream reports distance from the root rather than parentage,
+    so an edge between two symbols further out would be invented."""
+
     unresolved: int = 0
-    """Relations the upstream reported that could not be pinned to one symbol at each end.
+    """Hops the upstream reported without being able to pin them to one symbol.
 
     Counted rather than shown: a relation that might be to any of three functions is more
     misleading than a relation that is missing, and a member who knows how many were dropped
-    knows not to read an empty result as proof that nothing calls it.
+    knows not to read a short result as proof that nothing else calls it.
     """
+
+    total: int | None = None
+    truncated: bool = False
+    raw: Any = None
+
+
+@dataclass(frozen=True)
+class SourceText:
+    """One symbol's source, as the upstream cut it."""
+
+    canonical_qn: str
+    display_qn: str
+    text: str
+    repo: str | None = None
+    file: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    clipped_at: int | None = None
+    """Where the upstream stopped, when it did. Read as the whole thing, a clipped body is
+    how somebody concludes a function does not handle a case it handles on line 600."""
 
     raw: Any = None
 
 
-def _first(entry: dict[str, Any], keys: Iterable[str]) -> Any:
-    for key in keys:
-        if (value := entry.get(key)) not in (None, ""):
-            return value
-    return None
+def read_symbols(pages: Iterable[tuple[str | None, Any]]) -> SymbolMatches:
+    """Read one search result per repository into one answer.
 
-
-def _entries(payload: Any) -> list[Any]:
-    """The list inside a payload, whatever the payload calls it."""
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        for key in COLLECTION_KEYS:
-            if isinstance(inside := payload.get(key), list):
-                return inside
-    return []
-
-
-def _line(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _named(entry: Any) -> tuple[str, dict[str, Any]] | None:
-    """An entry's canonical name, if it has one this service can use as an identity."""
-    if isinstance(entry, str):
-        return (entry, {}) if entry.strip() else None
-    if not isinstance(entry, dict):
-        return None
-    name = _first(entry, QUALIFIED_NAME_KEYS)
-    return (str(name), entry) if isinstance(name, str | int) and str(name).strip() else None
-
-
-def _repo_of(entry: dict[str, Any], fallback: str | None) -> str | None:
-    named = _first(entry, REPO_KEYS)
-    return repo_key(str(named)) if isinstance(named, str) else fallback
-
-
-def read_symbols(payload: Any, repo: str | None = None) -> SymbolMatches:
-    """Read a symbol search result, dropping and counting anything without an identity."""
-    found = [named for entry in _entries(payload) if (named := _named(entry)) is not None]
-    unreadable = len(_entries(payload)) - len(found)
-    displays = readable_names((name, _repo_of(entry, repo) or "") for name, entry in found)
-    matches = [
-        Symbol(
-            canonical_qn=name,
-            display_qn=displays[name],
-            repo=_repo_of(entry, repo),
-            file=str(file) if (file := _first(entry, FILE_KEYS)) is not None else None,
-            line=_line(_first(entry, LINE_KEYS)),
-            kind=str(kind) if (kind := _first(entry, KIND_KEYS)) is not None else None,
-        )
-        for name, entry in found
+    Several pages rather than one because the upstream searches a single project at a time,
+    and the pages have to be named together: two symbols that read alike are told apart by a
+    short identifier, and deciding that per repository would let a name repeat across two of
+    them without either one knowing.
+    """
+    read = [(repo, page, _symbol_rows(page)) for repo, page in pages]
+    found = [
+        (repo or "", named, row)
+        for repo, _, (_, rows) in read
+        for row in rows
+        if (named := row.qualified_name) is not None
     ]
+    displays = readable_names((named, repo) for repo, named, _ in found)
+    totals = [counted(page, "total") for _, page, _ in read]
     return SymbolMatches(
-        matches=matches,
-        unreadable=unreadable,
-        # Only when nothing could be read: an unrecognised payload is still evidence, and
-        # throwing it away would leave a member with a blank panel and no way to say why.
-        raw=payload if not matches else None,
+        matches=[
+            Symbol(
+                canonical_qn=named,
+                display_qn=displays[(named, repo)],
+                repo=repo or None,
+                file=row.where,
+                line=row.line,
+                kind=row.kind,
+            )
+            for repo, named, row in found
+        ],
+        unreadable=sum(len(rows) for _, _, (_, rows) in read) - len(found),
+        total=_summed(total for total, _ in totals),
+        truncated=any(more for _, more in totals),
+        # An unrecognised payload is still evidence, and throwing it away leaves a member with
+        # a blank panel and no way to say why. A payload that was recognised and holds nothing
+        # is a different thing entirely -- that one is an answer, and answering "no matches"
+        # by dumping the payload teaches people to distrust the empty result that is correct.
+        raw=[page for _, page, _ in read] if not any(known for _, _, (known, _) in read) else None,
     )
-
-
-def _pairs(payload: Any) -> Iterator[tuple[Any, Any]]:
-    """Every caller/callee pair the payload states, in whichever way it states them."""
-    if isinstance(payload, dict):
-        for key in PATH_KEYS:
-            for chain in payload.get(key) or []:
-                if isinstance(chain, list):
-                    yield from zip(chain, chain[1:], strict=False)
-        for key in EDGE_KEYS:
-            for edge in payload.get(key) or []:
-                if isinstance(edge, dict):
-                    yield _first(edge, CALLER_KEYS), _first(edge, CALLEE_KEYS)
-    for entry in _entries(payload):
-        if isinstance(entry, dict) and (
-            _first(entry, CALLER_KEYS) is not None or _first(entry, CALLEE_KEYS) is not None
-        ):
-            yield _first(entry, CALLER_KEYS), _first(entry, CALLEE_KEYS)
 
 
 def read_call_chain(payload: Any, root: str, direction: str, repo: str | None = None) -> CallChain:
-    """Read a traced call chain, keeping only relations with a symbol at both ends."""
-    edges: list[CallEdge] = []
-    unresolved = 0
-    entries: dict[str, dict[str, Any]] = {}
-    for caller, callee in _pairs(payload):
-        ends = [_named(one) for one in (caller, callee)]
-        if any(one is None for one in ends):
-            unresolved += 1
-            continue
-        for name, entry in ends:  # type: ignore[misc]
-            entries.setdefault(name, entry)
-        edges.append(CallEdge(caller=ends[0][0], callee=ends[1][0]))  # type: ignore[index]
+    """Read a traced call chain, keeping only the hops the upstream stands behind."""
+    sections = _call_sections(payload)
+    hops = [
+        (way, named, row)
+        for way, section in sections
+        for row in rows_of(section)
+        if (named := row.qualified_name) is not None and row.text("strategy") != UNRESOLVED
+    ]
+    unresolved = sum(1 for _, section in sections for _ in rows_of(section)) - len(hops)
+    total, truncated = _call_totals(payload)
 
-    if not edges:
+    if not hops:
         # Nothing was resolvable, so anything the upstream did say is still worth showing.
-        return CallChain(root=root, direction=direction, unresolved=unresolved, raw=payload)
+        return CallChain(
+            root=root,
+            direction=direction,
+            unresolved=unresolved,
+            total=total,
+            truncated=truncated,
+            raw=payload,
+        )
 
-    displays = readable_names(
-        (name, _repo_of(entry, repo) or "") for name, entry in entries.items()
-    )
-    depths = _depths(root, edges, direction)
+    displays = readable_names((named, repo or "") for _, named, _ in hops)
     nodes = [
         CallNode(
             symbol=Symbol(
-                canonical_qn=name,
-                display_qn=displays[name],
-                repo=_repo_of(entry, repo),
-                file=str(file) if (file := _first(entry, FILE_KEYS)) is not None else None,
-                line=_line(_first(entry, LINE_KEYS)),
-                kind=str(kind) if (kind := _first(entry, KIND_KEYS)) is not None else None,
+                canonical_qn=named,
+                display_qn=displays[(named, repo or "")],
+                repo=repo,
+                file=row.where,
+                line=row.line,
+                kind=row.kind,
             ),
-            depth=depths.get(name, 0),
+            depth=row.number("hop") or FIRST_HOP,
+            strategy=row.text("strategy"),
+            confidence=row.decimal("confidence"),
         )
-        for name, entry in entries.items()
+        for _, named, row in hops
     ]
     return CallChain(
         root=root,
         direction=direction,
         nodes=sorted(nodes, key=lambda one: (one.depth, one.symbol.display_qn)),
-        edges=edges,
+        edges=[
+            CallEdge(caller=named, callee=root) if way == "callers" else CallEdge(root, named)
+            for (way, named, row), node in zip(hops, nodes, strict=True)
+            if node.depth == FIRST_HOP
+        ],
         unresolved=unresolved,
+        total=total,
+        truncated=truncated,
     )
 
 
-def _depths(root: str, edges: list[CallEdge], direction: str) -> dict[str, int]:
-    """How many hops each symbol sits from the one that was asked about.
+def read_source(payload: Any, qualified_name: str, repo: str | None = None) -> SourceText | None:
+    """Read one symbol's source, or None if the payload is not one."""
+    if not isinstance(payload, dict) or not isinstance(source := payload.get("source"), str):
+        return None
+    named = payload.get("qualified_name")
+    canonical = named if isinstance(named, str) and named.strip() else qualified_name
+    displays = readable_names([(canonical, repo or "")])
+    return SourceText(
+        canonical_qn=canonical,
+        display_qn=displays[(canonical, repo or "")],
+        text=source,
+        repo=repo,
+        file=_relative(payload.get("file_path"), payload.get("name")),
+        start_line=_whole(payload.get("start_line")),
+        end_line=_whole(payload.get("end_line")),
+        clipped_at=_whole(payload.get("clipped_at_lines"))
+        if payload.get("source_clipped")
+        else None,
+    )
 
-    Walked in the direction the question was asked in: tracing callers, the chain grows away
-    from the root along `caller`; tracing callees, along `callee`.
+
+def _symbol_rows(payload: Any) -> tuple[bool, list[Row]]:
+    """The rows of a search answer, and whether the answer was one this service understood.
+
+    Understanding it matters separately from finding anything in it: a search that legitimately
+    matched nothing and a payload in a shape nobody here recognises both yield no rows, and
+    only one of them should be shown to a member as a payload dump.
+
+    The upstream answers in tables. The tolerant branch stays because the shape is not part of
+    any contract we were given: a version that answers in plain objects should degrade to a
+    readable list rather than to an empty one.
     """
-    inbound = direction != "outbound"
-    onward: dict[str, list[str]] = {}
-    for edge in edges:
-        here, there = (edge.callee, edge.caller) if inbound else (edge.caller, edge.callee)
-        onward.setdefault(here, []).append(there)
-    start = next((name for name in _reachable_names(edges) if name.endswith(root)), root)
-    depths = {start: 0}
-    frontier = [start]
-    while frontier:
-        name = frontier.pop(0)
-        for adjacent in onward.get(name, []):
-            if adjacent not in depths:
-                depths[adjacent] = depths[name] + 1
-                frontier.append(adjacent)
-    return depths
+    if isinstance(payload, dict) and "cols" in payload:
+        return True, list(rows_of(payload))
+    loose = _loose_entries(payload)
+    rows = [
+        Row(entry) if isinstance(entry, dict) else Row({"qn": entry})
+        for entry in loose
+        if isinstance(entry, dict) or (isinstance(entry, str) and entry.strip())
+    ]
+    return bool(loose), rows
 
 
-def _reachable_names(edges: list[CallEdge]) -> list[str]:
-    return [name for edge in edges for name in (edge.caller, edge.callee)]
+def _loose_entries(payload: Any) -> list[Any]:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("results", "matches", "symbols", "nodes", "items", "entries", "data"):
+            if isinstance(inside := payload.get(key), list):
+                return inside
+    return []
+
+
+def _call_sections(payload: Any) -> list[tuple[str, Any]]:
+    """The traced hops, under the heading that says which way they run."""
+    if not isinstance(payload, dict):
+        return []
+    return [
+        (way, payload[way]) for way in ("callers", "callees") if isinstance(payload.get(way), dict)
+    ]
+
+
+def _call_totals(payload: Any) -> tuple[int | None, bool]:
+    if not isinstance(payload, dict):
+        return None, False
+    totals = [
+        found
+        for way in ("callers_total", "callees_total")
+        if (found := _whole(payload.get(way))) is not None
+    ]
+    truncated = any(counted(payload.get(way), "total")[1] for way in ("callers", "callees"))
+    return (sum(totals) if totals else None), truncated or bool(payload.get("next"))
+
+
+def _summed(totals: Iterable[int | None]) -> int | None:
+    """How many matched in total, when every page said. One page that did not makes the sum
+    a smaller number presented as a complete one, which is worse than saying nothing."""
+    counts = list(totals)
+    return sum(one for one in counts if one is not None) if counts and None not in counts else None
+
+
+def _whole(value: Any) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _relative(absolute: Any, fallback: Any) -> str | None:
+    """The path to show. The upstream gives an absolute one and, beside it, the repository
+    relative one it calls the node's name."""
+    if isinstance(fallback, str) and "/" in fallback:
+        return fallback
+    return absolute.strip() or None if isinstance(absolute, str) else None

@@ -2,16 +2,19 @@
  * A traced call chain, drawn as what it is.
  *
  * A generic JSON tree can show a call graph and still leave the one question unanswered: who
- * calls whom, and how far from the symbol you asked about. So the chain is laid out by depth,
- * with each symbol's callers or callees listed under it, and each row clickable onward.
+ * calls whom, and how far from the symbol you asked about. So the chain is laid out by depth
+ * from the symbol traced, and each row is clickable onward.
  *
- * What the upstream could not pin down is shown as a count, not omitted. An empty chain that
- * silently dropped four ambiguous relations reads as proof that nothing calls the symbol, which
- * is exactly the wrong conclusion.
+ * Two things it deliberately does not draw. Beyond the first hop there are no lines between
+ * symbols, because the upstream reports each hop's distance from the symbol asked about and
+ * never which symbol it arrived through -- a line from the second hop to the third would be
+ * this page's invention. And what the upstream could not pin down is shown as a count rather
+ * than omitted: an empty chain that silently dropped four ambiguous relations reads as proof
+ * that nothing calls the symbol, which is exactly the wrong conclusion.
  */
 
 import type { CallChain, CallNode } from "../api/types";
-import { Button, CopyButton, Empty } from "../ui";
+import { Badge, Button, CopyButton, Empty } from "../ui";
 import { PayloadView } from "./PayloadView";
 import css from "./calls.module.css";
 
@@ -20,36 +23,26 @@ function isChain(payload: unknown): payload is CallChain {
 }
 
 const RELATION: Record<string, string> = {
-  inbound: "被调用于",
-  outbound: "调用",
-  both: "关联",
+  inbound: "调用起点",
+  outbound: "被起点调用",
+  both: "与起点相关",
 };
 
-function Dropped({ count }: { count: number }) {
-  if (!count) return null;
-  return (
-    <div className={css.dropped}>
-      另有 {count} 条调用关系无法唯一确定两端的符号，已略去。没有边不等于没有调用。
-    </div>
-  );
-}
+/** How the upstream resolved a hop, said in terms of how much to trust it. */
+const STRATEGY: Record<string, string> = {
+  lsp: "类型解析",
+  language_rule: "语言规则",
+  heuristic: "启发式推断",
+};
 
-function Neighbours({ chain, node }: { chain: CallChain; node: CallNode }) {
-  const canonical = node.symbol.canonical_qn;
-  const outward = chain.edges
-    .filter((edge) => (chain.direction === "outbound" ? edge.caller : edge.callee) === canonical)
-    .map((edge) => (chain.direction === "outbound" ? edge.callee : edge.caller));
-  if (!outward.length) return null;
-  const shown = new Map(chain.nodes.map((one) => [one.symbol.canonical_qn, one.symbol.display_qn]));
+function Evidence({ node }: { node: CallNode }) {
+  if (!node.strategy) return null;
+  const trusted = node.strategy === "lsp";
   return (
-    <ul className={css.neighbours}>
-      {outward.map((name) => (
-        <li key={name}>
-          <span className={css.relation}>{RELATION[chain.direction] ?? RELATION.both}</span>
-          <span className={css.name}>{shown.get(name) ?? name}</span>
-        </li>
-      ))}
-    </ul>
+    <Badge tone={trusted ? "ok" : "neutral"}>
+      {STRATEGY[node.strategy] ?? node.strategy}
+      {node.confidence === null ? "" : ` ${Math.round(node.confidence * 100)}%`}
+    </Badge>
   );
 }
 
@@ -84,12 +77,35 @@ export function CallChainView({
 
   return (
     <div className={css.chain}>
-      <Dropped count={payload.unresolved} />
+      {payload.unresolved ? (
+        <div className={css.dropped}>
+          另有 {payload.unresolved} 条调用关系无法唯一确定两端的符号，已略去。没有边不等于没有调用。
+        </div>
+      ) : null}
+      {payload.truncated ? (
+        <div className={css.dropped}>
+          共 {payload.total ?? "更多"} 条，这里只是其中一页。
+        </div>
+      ) : null}
+      <div className={css.node}>
+        <div className={css.head}>
+          <span className={css.depth}>起点</span>
+          <span className={css.name}>{payload.root}</span>
+        </div>
+      </div>
       {payload.nodes.map((node) => (
-        <div key={node.symbol.canonical_qn} className={css.node} style={{ marginInlineStart: `${node.depth * 20}px` }}>
+        <div
+          key={node.symbol.canonical_qn}
+          className={css.node}
+          style={{ marginInlineStart: `${node.depth * 20}px` }}
+        >
           <div className={css.head}>
-            <span className={css.depth}>{node.depth === 0 ? "起点" : `第 ${node.depth} 跳`}</span>
+            <span className={css.depth}>第 {node.depth} 跳</span>
             <span className={css.name}>{node.symbol.display_qn}</span>
+            {node.depth === 1 ? (
+              <span className={css.relation}>{RELATION[payload.direction] ?? RELATION.both}</span>
+            ) : null}
+            <Evidence node={node} />
             {node.symbol.file ? (
               <span className={css.where}>
                 {node.symbol.file}
@@ -97,14 +113,13 @@ export function CallChainView({
               </span>
             ) : null}
           </div>
-          <Neighbours chain={payload} node={node} />
           <div className={css.actions}>
             {onRead ? (
               <Button small onClick={() => onRead(node.symbol.canonical_qn)}>
                 读源码
               </Button>
             ) : null}
-            {onTrace && node.depth > 0 ? (
+            {onTrace ? (
               <Button small onClick={() => onTrace(node.symbol.canonical_qn)}>
                 从这里继续追
               </Button>
@@ -113,6 +128,9 @@ export function CallChainView({
           </div>
         </div>
       ))}
+      <div className={css.dropped}>
+        第 2 跳起只知道距离起点多远，不知道经由谁抵达，因此不画符号之间的连线。要看中间那一段，从对应符号继续追。
+      </div>
     </div>
   );
 }

@@ -11,7 +11,7 @@ import pytest
 from conftest import FakeClock
 from knowledge_base.code.supervisor import Supervisor
 from knowledge_base.code.upstream import UpstreamRefused, UpstreamUnavailable
-from upstream_doubles import FakeBinary, tool_result
+from upstream_doubles import SCOPED_ARGS, FakeBinary, tool_result
 
 HEALTH = timedelta(seconds=30)
 RESTART = timedelta(seconds=60)
@@ -88,7 +88,7 @@ class TestAnswering:
         supervisor = supervised(binary)
 
         with pytest.raises(UpstreamRefused):
-            supervisor.call_tool("query_graph", {})
+            supervisor.call_tool("query_graph", SCOPED_ARGS)
 
         assert len(binary.channels) == 1
 

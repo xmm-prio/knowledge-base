@@ -65,4 +65,10 @@ class TestDisambiguation:
             [("a_src.copy.Run", "mops"), ("b_src.copy.Run", "mops"), ("x.move.Go", "mops")]
         )
 
-        assert names["x.move.Go"] == "mops.move.Go"
+        assert names[("x.move.Go", "mops")] == "mops.move.Go"
+
+    def test_one_name_in_two_repositories_is_two_symbols(self) -> None:
+        """Vendored code gives two repositories the same qualified name for different files."""
+        names = readable_names([("copy.Run", "ge"), ("copy.Run", "ops-nn")])
+
+        assert len(set(names.values())) == 2

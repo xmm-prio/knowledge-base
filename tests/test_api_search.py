@@ -22,6 +22,7 @@ async def distil(api: ApiHarness) -> None:
 
 async def test_it_answers_with_the_two_domains_grouped(api: ApiHarness) -> None:
     await distil(api)
+    api.place_repo("mops")
 
     body = (await api.client.get("/api/search", params={"q": "脏数据"})).json()
 
@@ -61,11 +62,12 @@ async def test_the_code_group_names_its_hits_twice(api: ApiHarness) -> None:
 async def test_code_search_can_be_narrowed_to_one_repository_and_switched_to_text(
     api: ApiHarness,
 ) -> None:
-    api.place_repo("mops")
+    project = api.place_repo("mops")
 
     await api.client.get("/api/search", params={"q": "DataCopy", "mode": "text", "repo": "mops"})
 
-    assert api.upstream.arguments_for("search_code") == [{"query": "DataCopy", "project": "mops"}]
+    (asked,) = api.upstream.arguments_for("search_code")
+    assert (asked["pattern"], asked["project"]) == ("DataCopy", project)
 
 
 async def test_a_code_upstream_that_is_down_does_not_take_the_documents_with_it(

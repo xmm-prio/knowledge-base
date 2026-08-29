@@ -97,13 +97,38 @@ export interface SymbolMatches {
   matches: CodeSymbol[];
   /** Entries the upstream returned that carry no name this service could identify. */
   unreadable: number;
+  /** How many matched in total, when every repository asked was able to say. */
+  total: number | null;
+  /** Whether a page limit stopped this short of everything that matched. */
+  truncated: boolean;
   /** The upstream's own payload, present only when nothing at all could be read from it. */
+  raw: unknown;
+}
+
+/** One matching line of source, for the searches that look at text rather than symbols. */
+export interface GrepLine {
+  file: string;
+  line: number | null;
+  text: string;
+}
+
+export interface TextMatches {
+  /** The declarations the matches fall inside, which is what makes a hit clickable. */
+  symbols: CodeSymbol[];
+  /** The matching lines themselves: comments, strings, and anything never parsed. */
+  lines: GrepLine[];
+  total: number | null;
+  truncated: boolean;
+  unreadable: number;
   raw: unknown;
 }
 
 export interface CallNode {
   symbol: CodeSymbol;
   depth: number;
+  /** How the upstream resolved this hop: `lsp`, `language_rule` or `heuristic`. */
+  strategy: string | null;
+  confidence: number | null;
 }
 
 export interface CallEdge {
@@ -115,10 +140,29 @@ export interface CallChain {
   root: string;
   direction: string;
   nodes: CallNode[];
+  /**
+   * Only ever the first hop. The upstream reports each hop's distance from the symbol asked
+   * about and not which symbol it arrived through, so anything further out has no edge to draw.
+   */
   edges: CallEdge[];
   /** Relations that could not be pinned to one symbol at each end, dropped and counted. */
   unresolved: number;
+  total: number | null;
+  truncated: boolean;
   raw: unknown;
+}
+
+/** One symbol's source, as the upstream cut it. */
+export interface SourceText {
+  canonical_qn: string;
+  display_qn: string;
+  text: string;
+  repo: string | null;
+  file: string | null;
+  start_line: number | null;
+  end_line: number | null;
+  /** Where the upstream stopped, when it did. Silence here would read as the whole body. */
+  clipped_at: number | null;
 }
 
 /**
@@ -144,7 +188,12 @@ export interface SearchReply {
 export interface Repo {
   name: string;
   path: string;
+  /** Whether the upstream will answer a question about it now, not merely that it once indexed it. */
   indexed: boolean;
+  symbols: number | null;
+  relations: number | null;
+  /** Files the upstream parsed only in part: named places the call graph can be missing edges. */
+  partial_files: number | null;
 }
 
 export interface RepoListReply {
@@ -220,5 +269,5 @@ export interface StatusReply {
   mcp: McpStatus;
 }
 
-export type SearchMode = "symbol" | "text" | "regex";
+export type SearchMode = "symbol" | "keyword" | "text" | "regex";
 export type CallDirection = "inbound" | "outbound" | "both";

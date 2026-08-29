@@ -21,6 +21,7 @@ from knowledge_base.api import create_app
 from knowledge_base.code.engine import CodeEngine
 from knowledge_base.docs.service import DocumentService
 from knowledge_base.layout import KnowledgeBaseRoot
+from upstream_doubles import StubUpstream, derived_name
 
 QUIET = timedelta(seconds=30)
 BETWEEN_COMMITS = timedelta(seconds=5)
@@ -32,27 +33,8 @@ ADVERTISED_PORT = 8080
 of whatever machine runs the tests is not a thing to assert against."""
 
 
-class FakeUpstream:
-    """The supervised binary, answering with canned payloads."""
-
-    def __init__(self, answers: dict[str, object] | None = None) -> None:
-        self.answers = answers or {}
-        self.failing: set[str] = set()
-        self.raising: dict[str, Exception] = {}
-        """Failures of a stated kind, for tests about how a failure is classified."""
-
-        self.calls: list[tuple[str, dict[str, object]]] = []
-
-    def call_tool(self, tool: str, arguments: dict[str, object]) -> object:
-        self.calls.append((tool, arguments))
-        if (stated := self.raising.get(tool)) is not None:
-            raise stated
-        if tool in self.failing:
-            raise RuntimeError(f"{tool} refused")
-        return self.answers.get(tool, {})
-
-    def arguments_for(self, tool: str) -> list[dict[str, object]]:
-        return [arguments for name, arguments in self.calls if name == tool]
+FakeUpstream = StubUpstream
+"""The name this harness has always used for the code domain's double."""
 
 
 class Unreachable:
@@ -102,9 +84,12 @@ class ApiHarness:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
-    def place_repo(self, name: str) -> None:
-        (self.root.codebase_dir / name / "src").mkdir(parents=True)
-        (self.root.codebase_dir / name / "src" / "main.c").write_text("int main(void){return 0;}\n")
+    def place_repo(self, name: str, indexed: bool = True) -> str:
+        """Put a repository on disk, and hand back what the upstream would call it."""
+        location = self.root.codebase_dir / name
+        (location / "src").mkdir(parents=True)
+        (location / "src" / "main.c").write_text("int main(void){return 0;}\n")
+        return self.upstream.indexes(location) if indexed else derived_name(location)
 
     async def go_quiet(self) -> None:
         """Let the author fall silent, then let the heartbeat notice."""

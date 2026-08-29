@@ -62,13 +62,19 @@ export function SymbolMatchesView({
 
   return (
     <div className={css.list}>
+      {payload.truncated ? (
+        <div className={css.dropped}>
+          只显示了前 {payload.matches.length} 条
+          {payload.total === null ? "" : `，共匹配 ${payload.total} 条`}。缩小检索词以看到其余的。
+        </div>
+      ) : null}
       {payload.unreadable ? (
         <div className={css.dropped}>
           上游另有 {payload.unreadable} 条结果没有可用的限定名，无法读取或追踪，已略去。
         </div>
       ) : null}
       {payload.matches.map((one) => (
-        <div key={one.canonical_qn} className={css.row}>
+        <div key={`${one.repo ?? ""}\u0000${one.canonical_qn}`} className={css.row}>
           <div className={css.head}>
             <span className={css.name}>{one.display_qn}</span>
             {one.kind ? <span className={css.kind}>{one.kind}</span> : null}

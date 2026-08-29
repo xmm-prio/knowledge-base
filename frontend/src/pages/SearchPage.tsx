@@ -13,6 +13,7 @@ import { api } from "../api/client";
 import type { Hit, SearchMode, SearchReply } from "../api/types";
 import { CodeAnswer } from "../components/CodeAnswer";
 import { SymbolMatchesView } from "../components/SymbolMatchesView";
+import { TextMatchesView } from "../components/TextMatchesView";
 import { useAsync } from "../hooks/useAsync";
 import { routes } from "../routes";
 import { Button, Empty, ErrorNotice, Field, Input, Loading, Panel, Segmented, Select } from "../ui";
@@ -21,6 +22,7 @@ import css from "./search.module.css";
 
 const MODES: { value: SearchMode; label: string }[] = [
   { value: "symbol", label: "符号" },
+  { value: "keyword", label: "关键词" },
   { value: "text", label: "全文" },
   { value: "regex", label: "正则" },
 ];
@@ -154,14 +156,19 @@ export function SearchPage() {
                 error={results.error}
                 empty="代码侧没有命中"
               >
-                {mode === "text"
-                  ? undefined
-                  : (payload) => (
-                      <SymbolMatchesView
-                        payload={payload}
-                        onRead={(canonical) => navigate(routes.code(canonical))}
-                      />
-                    )}
+                {(payload) =>
+                  mode === "text" ? (
+                    <TextMatchesView
+                      payload={payload}
+                      onRead={(canonical) => navigate(routes.code(canonical))}
+                    />
+                  ) : (
+                    <SymbolMatchesView
+                      payload={payload}
+                      onRead={(canonical) => navigate(routes.code(canonical))}
+                    />
+                  )
+                }
               </CodeAnswer>
             </Panel>
           </div>

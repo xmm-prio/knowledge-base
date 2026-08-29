@@ -19,24 +19,7 @@ from knowledge_base.docs.service import DocumentService
 from knowledge_base.layout import KnowledgeBaseRoot
 from knowledge_base.mcp import create_mcp_server
 from knowledge_base.mcp.progress import HEARTBEAT
-
-
-class StubUpstream:
-    """Stands in for the supervised binary, answering with canned payloads."""
-
-    def __init__(self, answers: dict[str, object] | None = None) -> None:
-        self.answers = answers or {}
-        self.calls: list[tuple[str, dict[str, object]]] = []
-
-    def call_tool(self, tool: str, arguments: dict[str, object]) -> object:
-        self.calls.append((tool, arguments))
-        answer = self.answers.get(tool, {})
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
-
-    def arguments_for(self, tool: str) -> list[dict[str, object]]:
-        return [arguments for name, arguments in self.calls if name == tool]
+from upstream_doubles import StubUpstream, derived_name
 
 
 class Library:
@@ -72,9 +55,12 @@ class Library:
     def text_of(self, relative: str) -> str:
         return (self.root.path / relative).read_text(encoding="utf-8")
 
-    def place_repo(self, name: str) -> None:
-        (self.root.codebase_dir / name / "src").mkdir(parents=True)
-        (self.root.codebase_dir / name / "src" / "main.c").write_text("int main(void){}\n")
+    def place_repo(self, name: str, indexed: bool = True) -> str:
+        """Put a repository on disk, and hand back what the upstream would call it."""
+        location = self.root.codebase_dir / name
+        (location / "src").mkdir(parents=True)
+        (location / "src" / "main.c").write_text("int main(void){}\n")
+        return self.upstream.indexes(location) if indexed else derived_name(location)
 
 
 @asynccontextmanager

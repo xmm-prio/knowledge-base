@@ -27,15 +27,23 @@ def mops(library: Library) -> Library:
     return library
 
 
+@pytest.fixture
+def project(library: Library) -> str:
+    """What the upstream calls the repository these tests ask about."""
+    return library.place_repo("mops")
+
+
 class TestListRepos:
     async def test_it_lists_what_operators_placed_under_codebase(self, mops: Library) -> None:
         listing = await mops.call("list_repos")
 
         assert [(repo.name, repo.path) for repo in listing.repos] == [("mops", "codebase/mops")]
 
-    async def test_a_repo_the_upstream_has_not_indexed_yet_says_so(self, mops: Library) -> None:
+    async def test_a_repo_the_upstream_has_not_indexed_yet_says_so(self, library: Library) -> None:
         """On disk and searchable are different states, and an agent has to know which it has."""
-        listing = await mops.call("list_repos")
+        library.place_repo("fresh", indexed=False)
+
+        listing = await library.call("list_repos")
 
         assert [repo.indexed for repo in listing.repos] == [False]
 
@@ -51,41 +59,48 @@ class TestAsking:
         assert answer.payload == ARCHITECTURE
 
     async def test_searching_by_symbol_is_the_default_and_text_search_is_asked_for(
-        self, mops: Library
+        self, library: Library, project: str
     ) -> None:
-        await mops.call("search_code", query="DataCopyPad", repo="mops")
-        await mops.call("search_code", query="DataCopyPad", repo="mops", mode="text")
+        await library.call("search_code", query="DataCopyPad", repo="mops")
+        await library.call("search_code", query="DataCopyPad", repo="mops", mode="text")
 
-        assert mops.upstream.arguments_for("search_graph") == [
-            {"name_pattern": "DataCopyPad", "project": "mops"}
-        ]
-        assert mops.upstream.arguments_for("search_code") == [
-            {"query": "DataCopyPad", "project": "mops"}
-        ]
+        (graph,) = library.upstream.arguments_for("search_graph")
+        (grep,) = library.upstream.arguments_for("search_code")
+        assert (graph["name_pattern"], graph["project"]) == ("DataCopyPad", project)
+        assert (grep["pattern"], grep["project"]) == ("DataCopyPad", project)
 
-    async def test_reading_a_symbol_asks_for_it_by_qualified_name(self, mops: Library) -> None:
-        await mops.call("read_symbol", qualified_name="src.copy.DataCopyPad")
+    async def test_reading_a_symbol_asks_for_it_by_qualified_name(
+        self, library: Library, project: str
+    ) -> None:
+        await library.call("read_symbol", qualified_name="src.copy.DataCopyPad")
 
-        assert mops.upstream.arguments_for("get_code_snippet") == [
-            {"qualified_name": "src.copy.DataCopyPad"}
+        assert library.upstream.arguments_for("get_code_snippet") == [
+            {"qualified_name": "src.copy.DataCopyPad", "project": project}
         ]
 
     async def test_tracing_answers_who_calls_this_unless_told_otherwise(
-        self, mops: Library
+        self, library: Library, project: str
     ) -> None:
-        await mops.call("trace_calls", symbol="DataCopyPad")
+        await library.call("trace_calls", symbol="DataCopyPad")
 
-        assert mops.upstream.arguments_for("trace_path") == [
-            {"function_name": "DataCopyPad", "direction": "inbound", "depth": 3}
-        ]
+        (asked,) = library.upstream.arguments_for("trace_path")
+        assert (asked["function_name"], asked["direction"], asked["depth"]) == (
+            "DataCopyPad",
+            "inbound",
+            3,
+        )
 
-    async def test_a_cypher_query_reaches_the_upstream_untouched(self, mops: Library) -> None:
+    async def test_a_cypher_query_reaches_the_upstream_untouched(
+        self, library: Library, project: str
+    ) -> None:
         """The one passthrough: rewriting the query would defeat its purpose."""
         cypher = "MATCH (f:Function) RETURN f.name LIMIT 1"
 
-        await mops.call("query_code_graph", cypher=cypher)
+        await library.call("query_code_graph", cypher=cypher, repo="mops")
 
-        assert mops.upstream.arguments_for("query_graph") == [{"query": cypher}]
+        assert library.upstream.arguments_for("query_graph") == [
+            {"query": cypher, "project": project}
+        ]
 
 
 class TestHonesty:

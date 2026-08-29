@@ -7,6 +7,8 @@ half is failure: the binary can be missing or mid-restart, and the code page has
 rather than break, while still telling a member whose typo it was.
 """
 
+from tests.upstream_replies import AMATMULB, TRACED
+
 from api_harness import ApiHarness
 from knowledge_base.code.upstream import UpstreamUnavailable
 
@@ -27,8 +29,7 @@ class TestRepos:
         self, api: ApiHarness
     ) -> None:
         api.place_repo("mops")
-        api.place_repo("fresh")
-        api.upstream.answers["list_projects"] = {"projects": [{"name": "mops"}]}
+        api.place_repo("fresh", indexed=False)
 
         body = (await api.client.get("/api/code/repos")).json()
 
@@ -69,6 +70,8 @@ class TestAsking:
         assert body["caveat"]
 
     async def test_reading_a_symbol_carries_no_such_warning(self, api: ApiHarness) -> None:
+        api.place_repo("mops")
+
         body = (await api.client.get("/api/code/symbol", params={"name": "src.a.B"})).json()
 
         assert body["caveat"] is None
@@ -76,29 +79,32 @@ class TestAsking:
     async def test_symbol_search_and_text_search_are_different_questions(
         self, api: ApiHarness
     ) -> None:
-        api.place_repo("mops")
+        project = api.place_repo("mops")
 
         await api.client.get("/api/code/search", params={"q": "DataCopyPad", "repo": "mops"})
         await api.client.get(
             "/api/code/search", params={"q": "DataCopyPad", "mode": "text", "repo": "mops"}
         )
 
-        assert api.upstream.arguments_for("search_graph") == [
-            {"name_pattern": "DataCopyPad", "project": "mops"}
-        ]
-        assert api.upstream.arguments_for("search_code") == [
-            {"query": "DataCopyPad", "project": "mops"}
-        ]
+        (graph,) = api.upstream.arguments_for("search_graph")
+        (grep,) = api.upstream.arguments_for("search_code")
+        assert (graph["name_pattern"], graph["project"]) == ("DataCopyPad", project)
+        assert (grep["pattern"], grep["project"]) == ("DataCopyPad", project)
 
     async def test_tracing_takes_a_direction_and_a_depth(self, api: ApiHarness) -> None:
+        api.place_repo("mops")
+
         await api.client.get(
             "/api/code/calls",
             params={"symbol": "DataCopyPad", "direction": "outbound", "depth": 5},
         )
 
-        assert api.upstream.arguments_for("trace_path") == [
-            {"function_name": "DataCopyPad", "direction": "outbound", "depth": 5}
-        ]
+        (asked,) = api.upstream.arguments_for("trace_path")
+        assert (asked["function_name"], asked["direction"], asked["depth"]) == (
+            "DataCopyPad",
+            "outbound",
+            5,
+        )
 
     async def test_a_depth_the_upstream_cannot_honour_is_refused(self, api: ApiHarness) -> None:
         response = await api.client.get(
@@ -109,10 +115,17 @@ class TestAsking:
 
     async def test_a_cypher_query_reaches_the_upstream_untouched(self, api: ApiHarness) -> None:
         cypher = "MATCH (f:Function) WHERE NOT EXISTS { (f)<-[:CALLS]-() } RETURN f.name"
+        project = api.place_repo("mops")
 
-        await api.client.post("/api/code/query", json={"cypher": cypher})
+        await api.client.post("/api/code/query", json={"cypher": cypher, "repo": "mops"})
 
-        assert api.upstream.arguments_for("query_graph") == [{"query": cypher}]
+        assert api.upstream.arguments_for("query_graph") == [{"query": cypher, "project": project}]
+
+    async def test_a_cypher_query_without_a_repository_is_refused(self, api: ApiHarness) -> None:
+        """The upstream holds one graph per repository and will not query across them."""
+        response = await api.client.post("/api/code/query", json={"cypher": "MATCH (f) RETURN f"})
+
+        assert response.status_code == 422
 
 
 class TestWhenTheUpstreamCannotAnswer:
@@ -161,6 +174,7 @@ class TestWhenTheUpstreamCannotAnswer:
         assert body["diagnostic"]
 
     async def test_a_bad_pattern_never_reaches_the_upstream(self, api: ApiHarness) -> None:
+        api.place_repo("mops")
         await api.client.get("/api/code/search", params={"q": "Run(", "mode": "regex"})
 
         assert api.upstream.calls == []
@@ -171,7 +185,8 @@ class TestWhatTheAnswerLooksLike:
         """One name to read on screen, one to hand back when the row is clicked."""
         api.place_repo("mops")
         api.upstream.answers["search_graph"] = {
-            "results": [{"qualified_name": "_srv_kb_mops_src.copy.Run", "project": "mops"}]
+            "cols": ["qn", "label"],
+            "rows": [["_srv_kb_mops_src.copy.Run", "Function"]],
         }
 
         body = (await api.client.get("/api/code/search", params={"q": "Run"})).json()
@@ -182,19 +197,21 @@ class TestWhatTheAnswerLooksLike:
 
     async def test_a_traced_chain_arrives_as_nodes_and_edges(self, api: ApiHarness) -> None:
         """A generic JSON tree cannot say who calls whom, which is the whole question."""
-        api.upstream.answers["trace_path"] = {"paths": [[{"qn": "a.Top"}, {"qn": "b.Leaf"}]]}
+        api.place_repo("mops")
+        api.upstream.answers["trace_path"] = TRACED
 
-        body = (await api.client.get("/api/code/calls", params={"symbol": "b.Leaf"})).json()
+        body = (await api.client.get("/api/code/calls", params={"symbol": AMATMULB})).json()
 
-        assert body["payload"]["edges"] == [{"caller": "a.Top", "callee": "b.Leaf"}]
+        (edge,) = body["payload"]["edges"]
+        assert edge["caller"].endswith(".Compute")
+        assert edge["callee"] == AMATMULB
 
     async def test_what_could_not_be_resolved_is_counted_beside_the_answer(
         self, api: ApiHarness
     ) -> None:
-        api.upstream.answers["trace_path"] = {
-            "edges": [{"caller": "a.Top", "callee": "b.Leaf"}, {"caller": "a.Top"}]
-        }
+        api.place_repo("mops")
+        api.upstream.answers["trace_path"] = TRACED
 
-        body = (await api.client.get("/api/code/calls", params={"symbol": "b.Leaf"})).json()
+        body = (await api.client.get("/api/code/calls", params={"symbol": AMATMULB})).json()
 
         assert body["payload"]["unresolved"] == 1

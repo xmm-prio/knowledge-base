@@ -14,10 +14,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from knowledge_base.code.answers import read_call_chain, read_symbols
+from knowledge_base.code.answers import read_call_chain, read_source, read_symbols
 from knowledge_base.code.failures import InvalidQuery
-from knowledge_base.code.naming import repo_key
-from knowledge_base.code.upstream import UpstreamUnavailable
+from knowledge_base.code.grep import read_text_matches
+from knowledge_base.code.projects import Catalog, NotIndexed, Project
 from knowledge_base.layout import KnowledgeBaseRoot
 
 logger = logging.getLogger(__name__)
@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 DISAMBIGUATION = "#"
 """What a display name uses to separate two symbols that read alike. See `naming`."""
 
-NEVER_MATCHES = "^$"
-"""A symbol-name pattern nothing can satisfy: names are not empty. Used to ask the upstream
-whether a repository's graph answers at all, without asking it to return anything."""
+SEARCH_LIMIT = 50
+"""Results to ask for per repository. The upstream truncates silently without this, and
+reports `total` and `has_more` beside the page so a caller can say that it did."""
 
 MAX_TRACE_DEPTH = 5
 """The upstream traverses at most five hops, and says so rather than truncating quietly."""
@@ -51,6 +51,11 @@ class SearchMode(StrEnum):
     SYMBOL = "symbol"
     """Find declarations whose name contains this text, taken literally."""
 
+    KEYWORD = "keyword"
+    """Rank declarations by how well they match these words. The upstream splits camelCase
+    and weighs functions, routes and classes above the rest, so it finds a symbol whose exact
+    spelling nobody remembers."""
+
     TEXT = "text"
     """Grep the indexed source. Finds comments, strings and unparsed languages too."""
 
@@ -70,22 +75,58 @@ class Direction(StrEnum):
     BOTH = "both"
 
 
-_SEARCHES = {
-    SearchMode.SYMBOL: ("search_graph", "name_pattern"),
-    SearchMode.TEXT: ("search_code", "query"),
-    SearchMode.REGEX: ("search_graph", "name_pattern"),
-}
-"""Which upstream tool each mode is, and what it calls the thing being looked for."""
+def _search_request(mode: SearchMode, asked: str, limit: int) -> tuple[str, dict[str, object]]:
+    """The upstream call one search mode is, with everything but the repository filled in.
+
+    Three details here are the upstream's and not ours to reinvent: `search_code` greps and
+    takes its needle as `pattern` with a `regex` flag beside it, `search_graph` matches names
+    against a regular expression under `name_pattern` unless a ranked `query` is given -- in
+    which case it ignores `name_pattern` entirely -- and both answer in a text tree unless
+    asked for JSON.
+    """
+    if mode is SearchMode.TEXT:
+        return "search_code", {"pattern": asked, "regex": False, "limit": limit}
+    named = "query" if mode is SearchMode.KEYWORD else "name_pattern"
+    return "search_graph", {named: asked, "limit": limit, "format": "json"}
 
 
 class UnknownRepo(ValueError):
     """No repository by that name sits under `codebase/`."""
 
 
+@dataclass(frozen=True)
+class Scope:
+    """One repository a question is actually asked about, under both of its names."""
+
+    repo: str
+    """The directory under `codebase/`. This is what a member sees and types."""
+
+    project: str
+    """What the upstream calls the same thing. Required by every read tool it offers."""
+
+
 class Upstream(Protocol):
     """Whatever can answer an upstream tool call. The supervisor is the real one."""
 
     def call_tool(self, tool: str, arguments: dict[str, object]) -> object: ...
+
+
+READY = "ready"
+"""The state `index_status` reports for a graph that will answer questions."""
+
+
+@dataclass(frozen=True)
+class IndexState:
+    """What the upstream says about one repository's graph."""
+
+    queryable: bool
+    symbols: int | None = None
+    """Nodes in the graph. A rough size, and a very quick way to spot a half-built one."""
+
+    relations: int | None = None
+    partial_files: int | None = None
+    """Files the upstream parsed only in part. Every one of them is a place the call graph
+    can be missing edges for a concrete, nameable reason."""
 
 
 @dataclass(frozen=True)
@@ -98,6 +139,10 @@ class Repo:
 
     indexed: bool
     """Whether the upstream has a graph for it. On disk and searchable are different states."""
+
+    symbols: int | None = None
+    relations: int | None = None
+    partial_files: int | None = None
 
 
 @dataclass(frozen=True)
@@ -129,13 +174,9 @@ class CodeEngine:
 
     def list_repos(self) -> list[Repo]:
         """Every repository under `codebase/`, and whether it can be searched right now."""
-        known = self._indexed_names()
+        catalog = Catalog.best_effort(self._upstream)
         return [
-            Repo(
-                name=name,
-                path=f"codebase/{name}",
-                indexed=repo_key(name) in known and self._answers_about(name),
-            )
+            _repo(name, self._state_of(catalog.of(self._location(name))))
             for name in self._present_names()
         ]
 
@@ -154,19 +195,30 @@ class CodeEngine:
 
     def get_architecture(self, repo: str) -> CodeAnswer:
         """Languages, packages, entry points, routes, hotspots and clusters of one repository."""
-        return self._ask("get_architecture", self._scope(repo), INCOMPLETE_CALL_GRAPH)
+        return self._ask("get_architecture", self._one(repo), INCOMPLETE_CALL_GRAPH)
 
     def search_code(
-        self, query: str, mode: SearchMode = SearchMode.SYMBOL, repo: str | None = None
+        self,
+        query: str,
+        mode: SearchMode = SearchMode.SYMBOL,
+        repo: str | None = None,
+        limit: int = SEARCH_LIMIT,
     ) -> CodeAnswer:
-        """Find code by declared name, or by text when the name is not what you remember."""
+        """Find code by declared name, by keyword, or by text when neither is remembered.
+
+        The upstream searches one project at a time, so a question that names no repository
+        is asked of every indexed one and the answers are laid end to end. They are not
+        ranked against each other: the relevance the upstream computes is relative to the
+        project it computed it in, and interleaving two such orders invents a third.
+        """
         chosen = SearchMode(mode)
-        tool, argument = _SEARCHES[chosen]
-        asked = _as_upstream_asks(query, chosen)
-        answer = self._ask(tool, {argument: asked} | self._scope(repo))
-        if chosen is SearchMode.TEXT:
-            return answer
-        return CodeAnswer(payload=read_symbols(answer.payload, repo), caveat=answer.caveat)
+        tool, arguments = _search_request(chosen, _as_upstream_asks(query, chosen), limit)
+        pages = [
+            (scope.repo, self._ask(tool, arguments | {"project": scope.project}).payload)
+            for scope in self._scopes(repo)
+        ]
+        read = read_text_matches if chosen is SearchMode.TEXT else read_symbols
+        return CodeAnswer(payload=read(pages))
 
     def read_symbol(self, qualified_name: str, repo: str | None = None) -> CodeAnswer:
         """Read the source of one symbol, named the way the upstream names it.
@@ -174,9 +226,10 @@ class CodeEngine:
         The name to hand in is `canonical_qn` from a search result. The short name beside it
         is for reading, and the upstream has never heard of it.
         """
-        return self._ask(
-            "get_code_snippet", {"qualified_name": _canonical(qualified_name)} | self._scope(repo)
-        )
+        named = _canonical(qualified_name)
+        answer = self._first_answer("get_code_snippet", {"qualified_name": named}, repo)
+        source = read_source(answer.payload, qualified_name=named, repo=repo)
+        return CodeAnswer(payload=source if source is not None else answer.payload)
 
     def trace_calls(
         self,
@@ -189,10 +242,16 @@ class CodeEngine:
         if not 1 <= depth <= MAX_TRACE_DEPTH:
             raise InvalidQuery(f"深度只能是 1 到 {MAX_TRACE_DEPTH}，收到 {depth}")
         named = _canonical(symbol)
-        answer = self._ask(
+        answer = self._first_answer(
             "trace_path",
-            {"function_name": named, "direction": Direction(direction), "depth": depth}
-            | self._scope(repo),
+            {
+                "function_name": named,
+                "direction": Direction(direction),
+                "depth": depth,
+                "format": "json",
+                "include_evidence": True,
+            },
+            repo,
             INCOMPLETE_CALL_GRAPH,
         )
         chain = read_call_chain(
@@ -200,24 +259,62 @@ class CodeEngine:
         )
         return CodeAnswer(payload=chain, caveat=answer.caveat)
 
-    def query_code_graph(self, cypher: str, repo: str | None = None) -> CodeAnswer:
-        """Run a read-only openCypher query against the graph.
+    def query_code_graph(self, cypher: str, repo: str) -> CodeAnswer:
+        """Run a read-only openCypher query against one repository's graph.
 
         The one place an upstream interface reaches a caller unchanged, for the questions the
         capabilities above cannot phrase. See docs/adr/0002.
         """
-        return self._ask(
-            "query_graph", {"query": cypher} | self._scope(repo), INCOMPLETE_CALL_GRAPH
-        )
+        return self._ask("query_graph", {"query": cypher} | self._one(repo), INCOMPLETE_CALL_GRAPH)
 
     def _ask(
         self, tool: str, arguments: dict[str, object], caveat: str | None = None
     ) -> CodeAnswer:
         return CodeAnswer(payload=self._upstream.call_tool(tool, arguments), caveat=caveat)
 
-    def _scope(self, repo: str | None) -> dict[str, object]:
-        """Narrow a question to one repository, or leave it spanning the whole fleet."""
-        return {"project": self._verified(repo)} if repo is not None else {}
+    def _first_answer(
+        self, tool: str, arguments: dict[str, object], repo: str | None, caveat: str | None = None
+    ) -> CodeAnswer:
+        """Ask about one symbol, in the repository given or in whichever one knows it.
+
+        A canonical name identifies a symbol but does not say where it lives, and the caller
+        that got it from a search may not have kept the repository beside it. Asking each in
+        turn and stopping at the first answer is what a member would do by hand; the last
+        refusal is what they hear if nobody knows the name.
+        """
+        scopes = self._scopes(repo)
+        for position, scope in enumerate(scopes, start=1):
+            try:
+                return self._ask(tool, arguments | {"project": scope.project}, caveat)
+            except Exception:
+                if position == len(scopes):
+                    raise
+                logger.debug("%s does not answer for %s, trying the next", scope.repo, tool)
+        raise NotIndexed("没有任何已索引的代码库")
+
+    def _one(self, repo: str) -> dict[str, object]:
+        """The `project` argument for a question that is about one named repository."""
+        return {"project": self._scopes(repo)[0].project}
+
+    def _scopes(self, repo: str | None) -> list[Scope]:
+        """Every repository a question should reach, under the name the upstream wants.
+
+        One when a repository was named, all the indexed ones when none was. A repository the
+        upstream has no project for cannot be asked about at all, so that is said here rather
+        than sent and refused for a missing argument.
+        """
+        catalog = Catalog.read_from(self._upstream)
+        wanted = [self._verified(repo)] if repo is not None else self._present_names()
+        found = [
+            Scope(repo=name, project=project.name)
+            for name in wanted
+            if (project := catalog.of(self._location(name))) is not None
+        ]
+        if found:
+            return found
+        if repo is not None:
+            raise NotIndexed(f"代码库 {repo} 尚未索引，请先在代码库页面索引它")
+        raise NotIndexed("还没有任何代码库被索引，请先在代码库页面执行索引")
 
     def _index(self, repo: str) -> IndexOutcome:
         """Index one repository whose name is already known to be real.
@@ -253,67 +350,91 @@ class CodeEngine:
             if entry.is_dir() and not entry.name.startswith(".")
         )
 
-    def _indexed_names(self) -> set[str]:
-        """Ask the upstream what it has, in a form that can be compared to a directory name.
+    def _state_of(self, project: Project | None) -> IndexState:
+        """What the upstream will say about this repository if it is asked something.
 
-        A silent binary must not hide what is on disk, so a failure here means every
-        repository is listed as not indexed rather than not listed at all.
+        Being listed says it remembers indexing it, which is not the same as being able to
+        search it now -- a half-written graph, a cache moved out from under it and a version
+        mismatch all list fine and answer nothing. Displayed as "indexed", that difference
+        costs a member the twenty minutes they spend not believing the search box.
+
+        `index_status` is the upstream's own answer to exactly this question. It reports the
+        size of the graph and which files it could not fully parse in the same breath, so the
+        listing states those too rather than paying for them and throwing them away.
         """
+        if project is None:
+            return IndexState(queryable=False)
         try:
-            payload = self._upstream.call_tool("list_projects", {})
-        except UpstreamUnavailable:
-            # Not having an upstream is a state the caller is already told about, once, by
-            # whoever tried to start it. Repeating it here as a traceback on every listing
-            # would bury the reasons that are worth reading.
-            logger.debug("no upstream to list indexed repositories")
-            return set()
-        except Exception:
-            logger.warning("upstream could not list indexed repositories", exc_info=True)
-            return set()
-        return {repo_key(name) for name in _project_names(payload)}
-
-    def _answers_about(self, repo: str) -> bool:
-        """Whether the upstream can actually answer a question about this repository.
-
-        Being listed says the upstream remembers indexing it, which is not the same as being
-        able to search it now -- a half-written graph, a cache moved out from under it and a
-        version mismatch all list fine and answer nothing. Displayed as "indexed", that
-        difference costs a member the twenty minutes they spend not believing the search box.
-
-        The probe is a symbol search for a pattern no name can match, so the upstream has to
-        reach the repository's graph and has nothing to return from it. It runs only for
-        repositories the upstream already claims, so a knowledge base of unindexed sources
-        costs nothing to list.
-        """
-        try:
-            self._upstream.call_tool(
-                "search_graph", {"name_pattern": NEVER_MATCHES, "project": repo}
-            )
-        except Exception as unanswered:  # noqa: BLE001 - any failure means "cannot search it"
-            logger.info("%s is listed by the upstream but cannot be searched: %s", repo, unanswered)
-            return False
-        return True
+            reported = self._upstream.call_tool("index_status", {"project": project.name})
+        except Exception as unanswered:  # noqa: BLE001 - any failure means "cannot query it"
+            logger.info("%s is indexed but does not answer: %s", project.name, unanswered)
+            return IndexState(queryable=False)
+        return _read_state(reported)
 
 
 def _as_upstream_asks(query: str, mode: SearchMode) -> str:
     """Turn what a member typed into what the upstream matches on.
 
-    The upstream takes a regular expression, so ordinary text has to be escaped rather than
-    forwarded: `DataCopy(dst` is a syntax error as a pattern and a perfectly reasonable thing
-    to remember about a function. A pattern the caller meant as one is checked here instead,
-    so an unbalanced bracket comes back saying where it is rather than as whatever the
-    upstream makes of it.
+    Only one of the modes hands a regular expression to something that reads it as one:
+    `name_pattern` has no literal flag, so a symbol name is escaped before it goes there and
+    `DataCopy(dst` stays a reasonable thing to remember rather than becoming an unbalanced
+    parenthesis. Grep is told `regex: false` and keyword search tokenises, so both take what
+    was typed. A pattern the caller meant as one is compiled here first, so an unbalanced
+    bracket comes back saying where it is instead of as whatever the upstream makes of it.
     """
     asked = query.strip()
     if not asked:
         raise InvalidQuery("检索词不能为空")
+    if mode is SearchMode.SYMBOL:
+        return re.escape(asked)
     if mode is not SearchMode.REGEX:
-        return re.escape(asked) if mode is SearchMode.SYMBOL else asked
+        return asked
     try:
         re.compile(asked)
     except re.error as broken:
         raise InvalidQuery(f"这不是一个有效的正则：{broken}") from broken
     return asked
+
+
+def _repo(name: str, state: IndexState) -> Repo:
+    return Repo(
+        name=name,
+        path=f"codebase/{name}",
+        indexed=state.queryable,
+        symbols=state.symbols,
+        relations=state.relations,
+        partial_files=state.partial_files,
+    )
+
+
+def _read_state(reported: object) -> IndexState:
+    """Read an `index_status` answer.
+
+    A status the upstream states has to say `ready`; one it does not state at all is taken as
+    ready, because the tool answering at all is the older, weaker evidence this used to rely
+    on and losing it would mark a working repository unindexed.
+    """
+    if not isinstance(reported, dict):
+        return IndexState(queryable=True)
+    stated = reported.get("status")
+    if isinstance(stated, str) and stated.strip().lower() != READY:
+        logger.info("a repository reports its index as %r rather than ready", stated)
+        return IndexState(queryable=False)
+    partial = reported.get("parse_partial")
+    files = partial.get("files") if isinstance(partial, dict) else None
+    return IndexState(
+        queryable=True,
+        symbols=_count(reported.get("nodes")),
+        relations=_count(reported.get("edges")),
+        partial_files=len(files) if isinstance(files, list) else None,
+    )
+
+
+def _count(value: object) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _canonical(name: str) -> str:
@@ -326,15 +447,3 @@ def _canonical(name: str) -> str:
             f"{named!r} 是给人看的短名。请用检索结果里的 canonical_qn，它才是上游认得的限定名"
         )
     return named
-
-
-def _project_names(payload: object) -> list[str]:
-    """Read repository names out of an upstream listing.
-
-    The upstream documents `list_projects` but not its payload shape, so this accepts both a
-    bare list of entries and a mapping that wraps one.
-    """
-    entries = payload.get("projects") if isinstance(payload, dict) else payload
-    if not isinstance(entries, list):
-        return []
-    return [str(entry["name"]) for entry in entries if isinstance(entry, dict) and "name" in entry]

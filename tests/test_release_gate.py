@@ -135,6 +135,27 @@ class TestWhatTheRealIndexSays:
                 after = (await client.get("/api/code/repos")).json()["repos"]
                 assert [one["indexed"] for one in after] == [True]
 
+    async def test_the_repository_is_found_under_whatever_the_upstream_renamed_it_to(
+        self, tmp_path: Path
+    ) -> None:
+        """The upstream indexes a repository under a name it derives from the whole path.
+
+        Nothing on this side can predict that spelling, and every read tool requires it. This
+        is the one test that can tell whether the two are still being joined correctly, since
+        only the real binary decides what it calls a project.
+        """
+        binary = prepared(tmp_path)
+        async with served(tmp_path, binary=binary) as address:
+            async with httpx.AsyncClient(base_url=address, timeout=INDEXING_PATIENCE) as client:
+                await indexed(client)
+
+                found = await client.get(
+                    "/api/code/search", params={"q": "entry_point", "repo": REPOSITORY}
+                )
+
+                assert found.json()["ok"] is True, found.text
+                assert found.json()["payload"]["matches"], found.text
+
     async def test_a_name_from_a_search_reads_back_as_source(self, tmp_path: Path) -> None:
         """The whole point of keeping two names: the short one is shown, the long one works."""
         binary = prepared(tmp_path)
@@ -174,6 +195,98 @@ class TestWhatTheRealIndexSays:
                 chain = traced.json()["payload"]
                 assert traced.json()["caveat"]
                 assert any("entry_point" in edge["caller"] for edge in chain["edges"]), chain
+
+
+class TestTheShapesTheReadersExpect:
+    """Every reader in `code/` is written against a payload shape nothing contractual pins.
+
+    An upstream upgrade can change a column name or nest a section differently and every test
+    that runs on a double will keep passing while the page goes blank -- which is exactly how
+    the search shipped unable to read a single result. These check the readers against what
+    the installed binary really answers, and they assert on the read answer rather than the
+    payload, because reading it is the part that breaks.
+    """
+
+    async def test_a_search_result_is_read_and_not_dumped(self, tmp_path: Path) -> None:
+        binary = prepared(tmp_path)
+        async with served(tmp_path, binary=binary) as address:
+            async with httpx.AsyncClient(base_url=address, timeout=INDEXING_PATIENCE) as client:
+                await indexed(client)
+
+                found = (
+                    await client.get("/api/code/search", params={"q": "helper", "repo": REPOSITORY})
+                ).json()
+
+                assert found["payload"]["matches"], found
+                assert found["payload"]["raw"] is None, "the table shape stopped being read"
+                assert found["payload"]["unreadable"] == 0, found
+
+    async def test_a_full_text_search_is_read_into_lines(self, tmp_path: Path) -> None:
+        """`search_code` answers in prose, so this reader is a text parser and the most
+        fragile thing here."""
+        binary = prepared(tmp_path)
+        async with served(tmp_path, binary=binary) as address:
+            async with httpx.AsyncClient(base_url=address, timeout=INDEXING_PATIENCE) as client:
+                await indexed(client)
+
+                found = (
+                    await client.get(
+                        "/api/code/search",
+                        params={"q": "helper", "mode": "text", "repo": REPOSITORY},
+                    )
+                ).json()
+
+                assert found["ok"] is True, found
+                assert found["payload"]["lines"] or found["payload"]["symbols"], found
+                assert found["payload"]["raw"] is None, "the grep report stopped being read"
+
+    async def test_a_ranked_search_is_read_too(self, tmp_path: Path) -> None:
+        """The same tool answers ranked questions in a different shape than pattern ones."""
+        binary = prepared(tmp_path)
+        async with served(tmp_path, binary=binary) as address:
+            async with httpx.AsyncClient(base_url=address, timeout=INDEXING_PATIENCE) as client:
+                await indexed(client)
+
+                found = (
+                    await client.get(
+                        "/api/code/search",
+                        params={"q": "entry point", "mode": "keyword", "repo": REPOSITORY},
+                    )
+                ).json()
+
+                assert found["ok"] is True, found
+                assert found["payload"]["raw"] is None, "the ranked shape stopped being read"
+
+    async def test_source_comes_back_as_source(self, tmp_path: Path) -> None:
+        binary = prepared(tmp_path)
+        async with served(tmp_path, binary=binary) as address:
+            async with httpx.AsyncClient(base_url=address, timeout=INDEXING_PATIENCE) as client:
+                await indexed(client)
+
+                found = (
+                    await client.get("/api/code/search", params={"q": "helper", "repo": REPOSITORY})
+                ).json()
+                first = found["payload"]["matches"][0]["canonical_qn"]
+
+                source = (
+                    await client.get("/api/code/symbol", params={"name": first, "repo": REPOSITORY})
+                ).json()
+
+                assert source["ok"] is True, source
+                assert "text" in source["payload"], "the snippet shape stopped being read"
+
+    async def test_how_large_the_index_is_reaches_the_repository_listing(
+        self, tmp_path: Path
+    ) -> None:
+        """The listing states the graph's size, which only the status call can supply."""
+        binary = prepared(tmp_path)
+        async with served(tmp_path, binary=binary) as address:
+            async with httpx.AsyncClient(base_url=address, timeout=INDEXING_PATIENCE) as client:
+                await indexed(client)
+
+                (repo,) = (await client.get("/api/code/repos")).json()["repos"]
+
+                assert repo["symbols"], repo
 
 
 class TestWhatThisMachineHandsOut:

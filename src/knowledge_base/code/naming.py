@@ -70,23 +70,28 @@ def display_name(canonical: str, repo: str) -> str:
     return f"{repo}.{tail}" if repo else tail
 
 
-def short_id(canonical: str) -> str:
-    """A stable few characters standing for one exact symbol."""
-    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:SHORT_ID_LENGTH]
+def short_id(canonical: str, repo: str = "") -> str:
+    """A stable few characters standing for one exact symbol in one exact repository."""
+    return hashlib.sha1(f"{repo}\0{canonical}".encode()).hexdigest()[:SHORT_ID_LENGTH]
 
 
-def readable_names(symbols: Iterable[tuple[str, str]]) -> dict[str, str]:
+def readable_names(symbols: Iterable[tuple[str, str]]) -> dict[tuple[str, str], str]:
     """Display names for a set of (canonical name, repository) pairs, all distinct.
+
+    Keyed by both halves, because a canonical name is only unique inside the repository it
+    came from: two repositories that vendor the same library report the same qualified name
+    for two different files. Keyed by the name alone, one of them would be shown -- and
+    clicked -- under the other's repository.
 
     Two symbols that read the same on screen are worse than one long name: a member clicks
     the wrong one and never finds out. So a name shared by more than one symbol earns a short
     stable identifier, and only then -- the common case stays short.
     """
-    proposed = {canonical: display_name(canonical, repo) for canonical, repo in symbols}
+    proposed = {(canonical, repo): display_name(canonical, repo) for canonical, repo in symbols}
     taken: dict[str, int] = {}
     for name in proposed.values():
         taken[name] = taken.get(name, 0) + 1
     return {
-        canonical: (name if taken[name] == 1 else f"{name}#{short_id(canonical)}")
-        for canonical, name in proposed.items()
+        (canonical, repo): (name if taken[name] == 1 else f"{name}#{short_id(canonical, repo)}")
+        for (canonical, repo), name in proposed.items()
     }

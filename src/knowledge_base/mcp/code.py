@@ -46,8 +46,8 @@ LIST_DESCRIPTION = "列出已纳管的代码库，以及各自是否已建好索
 ARCHITECTURE_DESCRIPTION = "某个代码库的整体结构：语言、包、入口、热点。陌生仓库先看这个。"
 
 SEARCH_DESCRIPTION = (
-    "在代码库里找代码。mode=symbol 按声明名逐字匹配（默认），"
-    "mode=text 搜源码全文，注释与未解析语言也搜得到，mode=regex 才把 query 当正则。"
+    "在代码库里找代码。symbol 按声明名逐字匹配（默认），keyword 按关键词排序、"
+    "记不清确切拼写时用，text 搜源码全文，regex 才把 query 当正则。"
 )
 
 READ_DESCRIPTION = (
@@ -90,10 +90,12 @@ def install(server: FastMCP, code: CodeEngine, heartbeat: timedelta) -> None:
     async def search_code(
         context: Context,
         query: Annotated[str, Field(description="要找的符号名或文本，按字面处理")],
-        mode: Annotated[SearchMode, Field(description="按符号、按文本还是按正则")] = (
+        mode: Annotated[SearchMode, Field(description="按符号、关键词、全文还是正则")] = (
             SearchMode.SYMBOL
         ),
-        repo: Annotated[str | None, Field(description="限定一个代码库，不传则全库")] = None,
+        repo: Annotated[
+            str | None, Field(description="限定一个代码库，不传则逐个问遍所有已索引的")
+        ] = None,
     ) -> CodeResult:
         """Find code by declared name, or by text."""
         return await ask(lambda: code.search_code(query, mode=mode, repo=repo), context)
@@ -126,7 +128,7 @@ def install(server: FastMCP, code: CodeEngine, heartbeat: timedelta) -> None:
     async def query_code_graph(
         context: Context,
         cypher: Annotated[str, Field(description="只读 openCypher 查询")],
-        repo: Annotated[str | None, Field(description="限定一个代码库")] = None,
+        repo: Annotated[str, Field(description="代码库名。上游一个代码库一张图，必须指定")],
     ) -> CodeResult:
         """Run a read-only graph query, for what the tools above cannot phrase."""
         return await ask(lambda: code.query_code_graph(cypher, repo=repo), context)

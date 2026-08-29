@@ -70,7 +70,7 @@ class TestAnsweringSeveralCallersAtOnce:
 
         with ThreadPoolExecutor(max_workers=CAPACITY) as callers:
             waiting = [
-                callers.submit(supervisor.call_tool, "search_graph", {"n": n})
+                callers.submit(supervisor.call_tool, "search_graph", {"project": f"repo-{n}"})
                 for n in range(CAPACITY)
             ]
             assert until(lambda: supervisor.in_flight == CAPACITY)
@@ -81,7 +81,7 @@ class TestAnsweringSeveralCallersAtOnce:
             binary.release()
             answers = [one.result(timeout=PATIENCE) for one in waiting]
 
-        assert answers == [{"asked": {"n": n}} for n in range(CAPACITY)]
+        assert answers == [{"asked": {"project": f"repo-{n}"}} for n in range(CAPACITY)]
 
     def test_no_caller_is_given_another_caller_s_answer(self) -> None:
         """The failure a shared session produces, and the reason there are several."""
@@ -90,24 +90,25 @@ class TestAnsweringSeveralCallersAtOnce:
 
         with ThreadPoolExecutor(max_workers=CAPACITY) as callers:
             waiting = [
-                callers.submit(supervisor.call_tool, "search_graph", {"n": n}) for n in range(60)
+                callers.submit(supervisor.call_tool, "search_graph", {"project": f"repo-{n}"})
+                for n in range(60)
             ]
             answers = [one.result(timeout=PATIENCE) for one in waiting]
 
-        assert answers == [{"asked": {"n": n}} for n in range(60)]
+        assert answers == [{"asked": {"project": f"repo-{n}"}} for n in range(60)]
 
     def test_one_slow_question_does_not_hold_up_the_others(self) -> None:
         binary = FakeBinary(ANSWERS)
         supervisor = pooled(binary)
-        supervisor.call_tool("search_graph", {"n": 0})
+        supervisor.call_tool("search_graph", {"project": "repo-0"})
         slow = binary.channels[0]
         slow.delay = 0.4
 
         with ThreadPoolExecutor(max_workers=2) as callers:
             started = time.monotonic()
-            held = callers.submit(supervisor.call_tool, "search_graph", {"n": 1})
+            held = callers.submit(supervisor.call_tool, "search_graph", {"project": "repo-1"})
             assert until(lambda: binary.gate.waiting == 0 and slow.delay > 0)
-            quick = callers.submit(supervisor.call_tool, "search_graph", {"n": 2})
+            quick = callers.submit(supervisor.call_tool, "search_graph", {"project": "repo-2"})
             quick.result(timeout=PATIENCE)
             elapsed = time.monotonic() - started
             held.result(timeout=PATIENCE)
@@ -120,7 +121,7 @@ class TestAnsweringSeveralCallersAtOnce:
         supervisor = pooled(binary)
 
         for n in range(5):
-            supervisor.call_tool("search_graph", {"n": n})
+            supervisor.call_tool("search_graph", {"project": f"repo-{n}"})
 
         assert len(binary.channels) == 1
 
@@ -133,7 +134,7 @@ class TestWhenOneProcessDies:
 
         with ThreadPoolExecutor(max_workers=CONVERSATIONS) as callers:
             waiting = [
-                callers.submit(supervisor.call_tool, "search_graph", {"n": n})
+                callers.submit(supervisor.call_tool, "search_graph", {"project": f"repo-{n}"})
                 for n in range(CONVERSATIONS)
             ]
             binary.wait_for(CONVERSATIONS)
@@ -144,7 +145,7 @@ class TestWhenOneProcessDies:
             answers = [one.result(timeout=PATIENCE) for one in waiting]
 
         assert sorted(str(one) for one in answers) == sorted(
-            str({"asked": {"n": n}}) for n in range(CONVERSATIONS)
+            str({"asked": {"project": f"repo-{n}"}}) for n in range(CONVERSATIONS)
         )
         assert all(not one.closed for one in survivors)
 
@@ -178,7 +179,7 @@ class TestWhenOneProcessDies:
 
         with ThreadPoolExecutor(max_workers=CONVERSATIONS) as callers:
             waiting = [
-                callers.submit(supervisor.call_tool, "search_graph", {"n": n})
+                callers.submit(supervisor.call_tool, "search_graph", {"project": f"repo-{n}"})
                 for n in range(CONVERSATIONS)
             ]
             binary.wait_for(CONVERSATIONS)
@@ -197,14 +198,14 @@ class TestWhenEveryConversationIsBusy:
         binary.hold()
 
         with ThreadPoolExecutor(max_workers=2) as callers:
-            first = callers.submit(supervisor.call_tool, "search_graph", {"n": 0})
+            first = callers.submit(supervisor.call_tool, "search_graph", {"project": "repo-0"})
             binary.wait_for(1)
-            second = callers.submit(supervisor.call_tool, "search_graph", {"n": 1})
+            second = callers.submit(supervisor.call_tool, "search_graph", {"project": "repo-1"})
             assert until(lambda: supervisor.in_flight == 2)
             binary.release()
 
-            assert first.result(timeout=PATIENCE) == {"asked": {"n": 0}}
-            assert second.result(timeout=PATIENCE) == {"asked": {"n": 1}}
+            assert first.result(timeout=PATIENCE) == {"asked": {"project": "repo-0"}}
+            assert second.result(timeout=PATIENCE) == {"asked": {"project": "repo-1"}}
         assert len(binary.channels) == 1
 
     def test_a_caller_beyond_the_capacity_is_told_rather_than_left_waiting(self) -> None:
@@ -217,7 +218,7 @@ class TestWhenEveryConversationIsBusy:
 
         def first() -> object:
             started.set()
-            return supervisor.call_tool("search_graph", {"n": 0})
+            return supervisor.call_tool("search_graph", {"project": "repo-0"})
 
         with ThreadPoolExecutor(max_workers=2) as callers:
             held = callers.submit(first)
@@ -225,7 +226,7 @@ class TestWhenEveryConversationIsBusy:
             binary.wait_for(1)
 
             with pytest.raises(UpstreamUnavailable, match="too many"):
-                supervisor.call_tool("search_graph", {"n": 1})
+                supervisor.call_tool("search_graph", {"project": "repo-1"})
 
             binary.release()
             held.result(timeout=PATIENCE)
@@ -242,7 +243,7 @@ class TestHealth:
 
         with ThreadPoolExecutor(max_workers=1) as callers:
             answering: Future[object] = callers.submit(
-                supervisor.call_tool, "search_graph", {"n": 0}
+                supervisor.call_tool, "search_graph", {"project": "repo-0"}
             )
             binary.wait_for(1)
             clock.advance(60)
@@ -250,7 +251,7 @@ class TestHealth:
             assert supervisor.check_health() is True
             assert binary.channels[0].tools_called() == ["search_graph"]
             binary.release()
-            assert answering.result(timeout=PATIENCE) == {"asked": {"n": 0}}
+            assert answering.result(timeout=PATIENCE) == {"asked": {"project": "repo-0"}}
 
     def test_a_probe_does_not_open_a_conversation_nobody_asked_for(self) -> None:
         binary = FakeBinary(ANSWERS)
@@ -260,7 +261,7 @@ class TestHealth:
         binary.hold()
 
         with ThreadPoolExecutor(max_workers=1) as callers:
-            answering = callers.submit(supervisor.call_tool, "search_graph", {"n": 0})
+            answering = callers.submit(supervisor.call_tool, "search_graph", {"project": "repo-0"})
             binary.wait_for(1)
             clock.advance(60)
             supervisor.check_health()
@@ -278,7 +279,7 @@ class TestStopping:
 
         with ThreadPoolExecutor(max_workers=CONVERSATIONS) as callers:
             waiting = [
-                callers.submit(supervisor.call_tool, "search_graph", {"n": n})
+                callers.submit(supervisor.call_tool, "search_graph", {"project": f"repo-{n}"})
                 for n in range(CONVERSATIONS)
             ]
             binary.wait_for(CONVERSATIONS)

@@ -65,6 +65,14 @@ class RepoReply(BaseModel):
     indexed: bool
     """On disk and searchable are different states, and the page shows both."""
 
+    symbols: int | None = None
+    """How large the graph is. The upstream states it whenever it states the status, and a
+    repository whose count is a hundredth of what it should be is a re-index nobody ordered."""
+
+    relations: int | None = None
+    partial_files: int | None = None
+    """Files the upstream could parse only in part: named places the call graph has holes."""
+
 
 class RepoListReply(BaseModel):
     repos: list[RepoReply]
@@ -86,7 +94,8 @@ class CypherRequest(BaseModel):
     """The escape hatch, for questions the capabilities above cannot phrase."""
 
     cypher: str = Field(min_length=1)
-    repo: str | None = None
+    repo: str = Field(min_length=1)
+    """Required: the upstream holds one graph per repository and queries exactly one."""
 
 
 async def ask(answer: Callable[[], CodeAnswer]) -> CodeReply:
@@ -117,7 +126,14 @@ def outcome(indexed: IndexOutcome) -> IndexReply:
 
 
 def repo(found: Repo) -> RepoReply:
-    return RepoReply(name=found.name, path=found.path, indexed=found.indexed)
+    return RepoReply(
+        name=found.name,
+        path=found.path,
+        indexed=found.indexed,
+        symbols=found.symbols,
+        relations=found.relations,
+        partial_files=found.partial_files,
+    )
 
 
 @router.get("/repos", summary="已纳管的代码库")
@@ -143,7 +159,9 @@ async def search(
         str, Query(min_length=1, description="符号名或关键词，按字面处理；正则请用 mode=regex")
     ],
     mode: SearchMode = SearchMode.SYMBOL,
-    repo: str | None = None,
+    repo: Annotated[
+        str | None, Query(description="不填则逐个询问每个已索引代码库，结果按代码库先后排列")
+    ] = None,
 ) -> CodeReply:
     return await ask(lambda: bound.code.search_code(q, mode=mode, repo=repo))
 

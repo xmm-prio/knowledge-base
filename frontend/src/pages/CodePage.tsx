@@ -13,7 +13,9 @@ import type { CallDirection, CodeReply, SearchMode } from "../api/types";
 import { Page } from "../app/Shell";
 import { CallChainView } from "../components/CallChainView";
 import { CodeAnswer } from "../components/CodeAnswer";
+import { SourceTextView } from "../components/SourceTextView";
 import { SymbolMatchesView } from "../components/SymbolMatchesView";
+import { TextMatchesView } from "../components/TextMatchesView";
 import { useAction, useAsync } from "../hooks/useAsync";
 import {
   Badge,
@@ -118,7 +120,12 @@ export function CodePage() {
                         {one.indexed ? "已索引" : "未索引"}
                       </Badge>
                     </span>
-                    <span className={css.repoPath}>{one.path}</span>
+                    <span className={css.repoPath}>
+                      {one.symbols === null
+                        ? one.path
+                        : `${one.symbols.toLocaleString()} 个符号` +
+                          (one.partial_files ? `，${one.partial_files} 个文件未完整解析` : "")}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -194,6 +201,7 @@ function Architecture({ repo }: { repo: string | null }) {
 /** What each mode is looking for, said where the person typing can read it. */
 const SEARCH_LABELS: Record<SearchMode, string> = {
   symbol: "符号名（按字面匹配，括号点号都不用转义）",
+  keyword: "关键词（驼峰会拆开，记不清确切拼写时用这个）",
   text: "源码关键词",
   regex: "符号名正则（写坏了会直接告诉你坏在哪）",
 };
@@ -222,6 +230,7 @@ function CodeSearch({ repo, follow }: { repo: string | null; follow: Follow }) {
             value={mode}
             options={[
               { value: "symbol", label: "符号" },
+              { value: "keyword", label: "关键词" },
               { value: "text", label: "全文" },
               { value: "regex", label: "正则" },
             ]}
@@ -233,11 +242,13 @@ function CodeSearch({ repo, follow }: { repo: string | null; follow: Follow }) {
         </Button>
       </form>
       <CodeAnswer answer={query.result} loading={query.running} error={query.error} idle="输入检索词">
-        {mode === "text"
-          ? undefined
-          : (payload) => (
-              <SymbolMatchesView payload={payload} onRead={follow.read} onTrace={follow.trace} />
-            )}
+        {(payload) =>
+          mode === "text" ? (
+            <TextMatchesView payload={payload} onRead={follow.read} onTrace={follow.trace} />
+          ) : (
+            <SymbolMatchesView payload={payload} onRead={follow.read} onTrace={follow.trace} />
+          )
+        }
       </CodeAnswer>
     </>
   );
@@ -276,7 +287,9 @@ function SymbolLookup({
           读取
         </Button>
       </form>
-      <CodeAnswer answer={query.result} loading={query.running} error={query.error} idle="输入限定名" />
+      <CodeAnswer answer={query.result} loading={query.running} error={query.error} idle="输入限定名">
+        {(payload) => <SourceTextView payload={payload} />}
+      </CodeAnswer>
     </>
   );
 }

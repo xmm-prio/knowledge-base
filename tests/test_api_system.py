@@ -31,8 +31,7 @@ class TestStatus:
 
     async def test_it_reports_the_code_domain_beside_it(self, api: ApiHarness) -> None:
         api.place_repo("mops")
-        api.place_repo("fresh")
-        api.upstream.answers["list_projects"] = {"projects": [{"name": "mops"}]}
+        api.place_repo("fresh", indexed=False)
 
         body = (await api.client.get("/api/system/status")).json()
 

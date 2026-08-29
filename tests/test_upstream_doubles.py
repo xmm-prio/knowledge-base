@@ -13,7 +13,7 @@ import threading
 import pytest
 
 from knowledge_base.code.upstream import Session, UpstreamUnavailable
-from upstream_doubles import FakeBinary, Gate, echo, tool_result
+from upstream_doubles import SCOPED_ARGS, FakeBinary, Gate, echo, tool_result
 
 
 def opened(channel: object) -> Session:
@@ -38,7 +38,7 @@ class TestHolding:
         session = opened(binary.spawn())
         binary.hold()
 
-        thread, answers = asking(session, "search_graph", {})
+        thread, answers = asking(session, "search_graph", SCOPED_ARGS)
         binary.wait_for(1)
 
         assert answers == []
@@ -53,10 +53,10 @@ class TestHolding:
         binary.channels[0].gate = Gate()
         binary.channels[0].gate.hold()
 
-        thread, answers = asking(held, "search_graph", {})
+        thread, answers = asking(held, "search_graph", SCOPED_ARGS)
         binary.channels[0].gate.wait_for(1)
 
-        assert free.call_tool("search_graph", {}) == {"symbols": []}
+        assert free.call_tool("search_graph", SCOPED_ARGS) == {"symbols": []}
         assert answers == []
         binary.channels[0].gate.release()
         thread.join(timeout=5)
@@ -66,7 +66,7 @@ class TestHolding:
         sessions = [opened(binary.spawn()) for _ in range(3)]
         binary.hold()
 
-        threads = [asking(one, "search_graph", {})[0] for one in sessions]
+        threads = [asking(one, "search_graph", SCOPED_ARGS)[0] for one in sessions]
         binary.wait_for(3)
 
         assert binary.gate.waiting == 3
@@ -80,7 +80,7 @@ class TestTellingConversationsApart:
         binary = FakeBinary({"search_graph": tool_result({}), "list_projects": tool_result({})})
         first, second = opened(binary.spawn()), opened(binary.spawn())
 
-        first.call_tool("search_graph", {})
+        first.call_tool("search_graph", SCOPED_ARGS)
         second.call_tool("list_projects", {})
 
         assert binary.channels[0].tools_called() == ["search_graph"]
@@ -91,9 +91,9 @@ class TestTellingConversationsApart:
         binary = FakeBinary({"search_graph": echo(lambda arguments: {"asked": arguments})})
         session = opened(binary.spawn())
 
-        assert session.call_tool("search_graph", {"name_pattern": "a"}) == {
-            "asked": {"name_pattern": "a"}
-        }
+        asked: dict[str, object] = {"project": "mops", "name_pattern": "a"}
+
+        assert session.call_tool("search_graph", asked) == {"asked": asked}
 
     def test_one_shot_commands_stay_apart_from_the_conversations(self) -> None:
         binary = FakeBinary()
@@ -112,8 +112,8 @@ class TestDying:
         binary.channels[0].die()
 
         with pytest.raises(UpstreamUnavailable):
-            doomed.call_tool("search_graph", {})
-        assert survivor.call_tool("search_graph", {}) == {}
+            doomed.call_tool("search_graph", SCOPED_ARGS)
+        assert survivor.call_tool("search_graph", SCOPED_ARGS) == {}
         assert binary.live == [binary.channels[1]]
 
     def test_a_conversation_that_dies_while_held_fails_rather_than_hanging(self) -> None:
@@ -126,7 +126,7 @@ class TestDying:
 
         def ask() -> None:
             try:
-                session.call_tool("search_graph", {})
+                session.call_tool("search_graph", SCOPED_ARGS)
             except BaseException as failure:  # noqa: BLE001 - the failure is the assertion
                 failures.append(failure)
 

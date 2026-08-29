@@ -12,7 +12,17 @@ from knowledge_base.code.upstream import (
     UpstreamRefused,
     UpstreamUnavailable,
 )
-from upstream_doubles import FakeChannel, tool_result
+from upstream_doubles import SCOPED_ARGS, FakeChannel, tool_result
+
+
+def loose(results: dict[str, object] | None = None) -> FakeChannel:
+    """A channel that answers whatever it is asked.
+
+    These tests are about the framing -- handshake, ids, notifications, a stream that went
+    away -- and several of them deliberately call a tool the upstream does not have. Holding
+    them to the tool contract would be testing the contract instead.
+    """
+    return FakeChannel(results, strict=False)
 
 
 def opened(channel: FakeChannel) -> Session:
@@ -24,7 +34,7 @@ def opened(channel: FakeChannel) -> Session:
 
 class TestOpening:
     def test_it_performs_the_handshake_before_anything_else(self) -> None:
-        channel = FakeChannel()
+        channel = loose()
 
         Session(channel).open()
 
@@ -32,7 +42,7 @@ class TestOpening:
 
     def test_it_introduces_itself_as_this_service(self) -> None:
         """The upstream logs the client name, which is how an operator tells sessions apart."""
-        channel = FakeChannel()
+        channel = loose()
 
         Session(channel).open()
 
@@ -43,7 +53,7 @@ class TestOpening:
 
 class TestCallingTools:
     def test_it_names_the_tool_and_its_arguments(self) -> None:
-        channel = FakeChannel({"list_projects": tool_result([])})
+        channel = loose({"list_projects": tool_result([])})
         session = opened(channel)
 
         session.call_tool("list_projects", {})
@@ -53,7 +63,7 @@ class TestCallingTools:
 
     def test_it_returns_the_json_the_upstream_wrote_into_its_text_content(self) -> None:
         payload = {"projects": [{"name": "mops"}]}
-        session = opened(FakeChannel({"list_projects": tool_result(payload)}))
+        session = opened(loose({"list_projects": tool_result(payload)}))
 
         assert session.call_tool("list_projects", {}) == payload
 
@@ -65,13 +75,13 @@ class TestCallingTools:
                 "structuredContent": {"projects": []},
             }
         }
-        session = opened(FakeChannel({"list_projects": result}))
+        session = opened(loose({"list_projects": result}))
 
         assert session.call_tool("list_projects", {}) == {"projects": []}
 
     def test_prose_the_upstream_did_not_encode_as_json_comes_back_as_text(self) -> None:
         result = {"result": {"content": [{"type": "text", "text": "indexed 42 files"}]}}
-        session = opened(FakeChannel({"index_repository": result}))
+        session = opened(loose({"index_repository": result}))
 
         assert session.call_tool("index_repository", {}) == "indexed 42 files"
 
@@ -79,21 +89,21 @@ class TestCallingTools:
         result = {
             "result": {"content": [{"type": "text", "text": "unsupported MERGE"}], "isError": True}
         }
-        session = opened(FakeChannel({"query_graph": result}))
+        session = opened(loose({"query_graph": result}))
 
         with pytest.raises(UpstreamRefused, match="unsupported MERGE"):
-            session.call_tool("query_graph", {})
+            session.call_tool("query_graph", SCOPED_ARGS)
 
     def test_a_protocol_level_error_is_raised_too(self) -> None:
         result = {"error": {"code": -32601, "message": "Method not found"}}
-        session = opened(FakeChannel({"nonesuch": result}))
+        session = opened(loose({"nonesuch": result}))
 
         with pytest.raises(UpstreamFailed, match="Method not found"):
             session.call_tool("nonesuch", {})
 
     def test_notifications_arriving_first_do_not_get_mistaken_for_the_answer(self) -> None:
         """The upstream reports indexing progress on the same stream as its replies."""
-        channel = FakeChannel({"index_repository": tool_result({"status": "indexed"})})
+        channel = loose({"index_repository": tool_result({"status": "indexed"})})
         session = opened(channel)
         channel.noise = [
             {"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progress": 1}}
@@ -103,7 +113,7 @@ class TestCallingTools:
 
     def test_a_channel_that_went_away_is_reported_as_unavailable(self) -> None:
         """The supervisor restarts on this, so it must be distinguishable from a refusal."""
-        channel = FakeChannel()
+        channel = loose()
         session = opened(channel)
         channel.die()
 
@@ -111,7 +121,7 @@ class TestCallingTools:
             session.call_tool("list_projects", {})
 
     def test_closing_the_session_closes_the_channel(self) -> None:
-        channel = FakeChannel()
+        channel = loose()
         session = opened(channel)
 
         session.close()

@@ -14,11 +14,23 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
+
+from tests.upstream_schema import refusal, unknown_arguments
 
 from knowledge_base.code.upstream import Channel, UpstreamUnavailable
+
+VIOLATIONS: list[str] = []
+"""Calls that named an argument the real upstream does not have, from every double in the
+running test. Emptied and asserted on by an autouse fixture; see conftest."""
+
+SCOPED_ARGS: dict[str, object] = {"project": "somewhere"}
+"""The least a read tool will accept. Tests about the plumbing -- framing, pooling, crashes --
+still have to make a call the upstream would run, or they are testing the refusal instead."""
 
 PATIENCE = 5.0
 """Seconds a faked exchange may block for. Past this a test is wedged, not slow, and saying
@@ -97,10 +109,14 @@ class FakeChannel:
         name: str = "upstream",
         gate: Gate | None = None,
         patience: float = PATIENCE,
+        strict: bool = True,
     ) -> None:
         self.results = results if results is not None else {}
         self.name = name
         self.gate = gate if gate is not None else Gate()
+        self.strict = strict
+        """Whether to hold callers to the real tool contract. Off only for tests about the
+        protocol itself, which call tools the upstream does not have."""
         self.sent: list[dict[str, object]] = []
         self.noise: list[dict[str, object]] = []
         self.closed = False
@@ -170,11 +186,21 @@ class FakeChannel:
         params = message.get("params")
         if message["method"] != "tools/call" or not isinstance(params, dict):
             return {"result": {}}
-        canned = self.results.get(str(params["name"]))
+        tool = str(params["name"])
+        arguments = params.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        if self.strict and (refused := refusal(tool, arguments)) is not None:
+            return {"result": {"isError": True, "content": [{"type": "text", "text": refused}]}}
+        if self.strict:
+            VIOLATIONS.extend(
+                f"{tool} has no argument {name!r}" for name in unknown_arguments(tool, arguments)
+            )
+        canned = self.results.get(tool)
         if callable(canned):
             # An answer computed from the question is how a test tells replies apart when
             # several are in flight at once.
-            canned = canned(params.get("arguments") or {})
+            canned = canned(arguments)
         return canned if isinstance(canned, dict) else {"result": {"content": []}}
 
 
@@ -186,9 +212,13 @@ class FakeBinary:
     """
 
     def __init__(
-        self, results: dict[str, object] | None = None, patience: float = PATIENCE
+        self,
+        results: dict[str, object] | None = None,
+        patience: float = PATIENCE,
+        strict: bool = True,
     ) -> None:
         self.results = results or {}
+        self.strict = strict
         self.channels: list[FakeChannel] = []
         self.actions: list[str] = []
         self.refuses_to_spawn = False
@@ -208,6 +238,7 @@ class FakeBinary:
             name=f"upstream-{index}",
             gate=self.gate,
             patience=self._patience,
+            strict=self.strict,
         )
         with self._lock:
             self.channels.append(channel)
@@ -242,6 +273,92 @@ class FakeBinary:
 def tool_result(payload: object) -> dict[str, object]:
     """What an MCP server returns for a successful tool call."""
     return {"result": {"content": [{"type": "text", "text": json.dumps(payload)}]}}
+
+
+class StubUpstream:
+    """The supervised binary as the code domain sees it: canned answers, no protocol.
+
+    It keeps its own list of indexed projects and answers `list_projects` from it, spelled
+    the way the binary spells one. Tests say which repositories are indexed by putting them
+    there; nobody writes a project name by hand, because the whole point is that the name is
+    the upstream's to derive and not ours to predict.
+    """
+
+    def __init__(self, answers: dict[str, object] | None = None) -> None:
+        self.answers = answers or {}
+        self.failing: set[str] = set()
+        self.raising: dict[str, Exception] = {}
+        """Failures of a stated kind, for tests about how a failure is classified."""
+
+        self.indexed: list[Path] = []
+        self.unknown_to: set[str] = set()
+        """Projects that refuse everything, for a symbol only one repository has heard of."""
+
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def indexes(self, location: Path) -> str:
+        """Have the upstream claim this directory, and say what it now calls it."""
+        self.indexed.append(location)
+        return derived_name(location)
+
+    def call_tool(self, tool: str, arguments: dict[str, object]) -> object:
+        self.calls.append((tool, arguments))
+        if (stated := self.raising.get(tool)) is not None:
+            raise stated
+        if tool in self.failing:
+            raise RuntimeError(f"{tool} refused")
+        if arguments.get("project") in self.unknown_to:
+            raise RuntimeError(f"{arguments['project']} knows nothing about that")
+        answer = self.answers.get(tool)
+        if isinstance(answer, Exception):
+            raise answer
+        if answer is not None:
+            return answer
+        return self._listing() if tool == "list_projects" else {}
+
+    def arguments_for(self, tool: str) -> list[dict[str, object]]:
+        return [arguments for name, arguments in self.calls if name == tool]
+
+    def _listing(self) -> dict[str, object]:
+        projects = [
+            {"name": derived_name(location), "root_path": str(location)}
+            for location in self.indexed
+        ]
+        return {
+            "projects": projects,
+            "total": len(projects),
+            "offset": 0,
+            "limit": 100,
+            "returned": len(projects),
+            "has_more": False,
+        }
+
+
+def derived_name(location: Path) -> str:
+    """The name the upstream gives a repository indexed from this path.
+
+    It flattens the whole path rather than taking its last component, which is why a gateway
+    that assumes the directory name gets a refusal: `/home/mdc/kb/codebase/ge` is indexed as
+    `home-mdc-kb-codebase-ge`.
+    """
+    return re.sub(r"[^A-Za-z0-9]+", "-", str(location)).strip("-").lower()
+
+
+def project_listing(codebase: Path, *repos: str) -> dict[str, object]:
+    """A `list_projects` answer covering these repositories, spelled the upstream's way."""
+    projects = [
+        {"name": derived_name(codebase / repo), "root_path": str(codebase / repo)} for repo in repos
+    ]
+    return tool_result(
+        {
+            "projects": projects,
+            "total": len(projects),
+            "offset": 0,
+            "limit": 100,
+            "returned": len(projects),
+            "has_more": False,
+        }
+    )
 
 
 def echo(payload: Callable[[dict[str, object]], object]) -> Callable[[dict[str, object]], object]:

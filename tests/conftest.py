@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -111,6 +111,22 @@ def files_in(path: Path, revision: str) -> list[str]:
     """The files one commit touched."""
     listing = _git(path, "show", "--name-only", "--pretty=", revision)
     return sorted(line for line in listing.splitlines() if line)
+
+
+@pytest.fixture(autouse=True)
+def upstream_contract_is_kept() -> Iterator[None]:
+    """Fail any test that sends the upstream an argument it does not have.
+
+    The real binary ignores an argument it does not recognise, so a misspelled one is
+    invisible until someone reads a log and wonders why a filter never applied. Here it is
+    the test's problem, at the moment it happens.
+    """
+    from upstream_doubles import VIOLATIONS
+
+    VIOLATIONS.clear()
+    yield
+    broken, _ = list(VIOLATIONS), VIOLATIONS.clear()
+    assert not broken, "the upstream would not understand these: " + "; ".join(sorted(set(broken)))
 
 
 @pytest_asyncio.fixture

@@ -57,3 +57,31 @@
   gap: var(--s-1);
   flex-wrap: wrap;
 }
+
+.section {
+  margin-top: var(--s-2);
+  font-size: var(--t-sm);
+  color: var(--c-text-muted);
+}
+
+.grep {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+}
+
+.grepLine {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.grepText {
+  font-family: var(--f-mono);
+  font-size: var(--t-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
